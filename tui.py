@@ -1068,11 +1068,22 @@ class SSHPanel(App):
         left/right (panel left, session right) and each session after that
         stacks beside the previous one.
         """
+        started = time.time()
         for host, session in targets:
             hosts.launch(["ssh-connect", host, session])
             # let the compositor map and place each window before the next, or
             # they race and land on top of each other
             time.sleep(0.7)
+
+        # A window that dies on the way up takes the reason with it, and the
+        # key looks like it did nothing at all. ssh-connect leaves the reason
+        # behind precisely so it can be said out loud here.
+        error = hosts.wait_launch_error(started)
+        if error:
+            self.call_from_thread(self.status, f"did not start -- {error}")
+            self.call_from_thread(
+                self.notify, error, title="window failed to open",
+                severity="error", timeout=12)
 
     def action_switch_view(self) -> None:
         self.view = "hosts" if self.view == "chats" else "chats"

@@ -362,6 +362,46 @@ def launch(argv: list[str], app_id: str = SESSION_APP_ID) -> None:
                      stderr=subprocess.DEVNULL, start_new_session=True)
 
 
+# Where ssh-connect leaves a note when a window died on the way up. Watching the
+# launcher's own exit would tell us nothing: omarchy-launch-tui is `exec setsid
+# uwsm-app ...`, so it is gone within milliseconds whether the session came up
+# or not, and the real error is on the far side of a terminal we do not own.
+LAUNCH_ERROR = Path(os.environ.get("XDG_CACHE_HOME",
+                                   Path.home() / ".cache")) / "helm" / "last-launch-error"
+
+
+def launch_error(since: float) -> str:
+    """The failure a just-launched window reported, or "" if it is running.
+
+    `since` is when the launch started, so an old note from yesterday's failure
+    cannot be mistaken for this one.
+    """
+    try:
+        stamp, target, reason = LAUNCH_ERROR.read_text().strip().split("\t", 2)
+        # `date +%s` truncates to the second, so a note written 200ms after the
+        # launch can carry a stamp a fraction *before* it. Without the second
+        # of slack, the fastest failures -- the ones worth reporting -- would
+        # be the ones dismissed as stale.
+        if float(stamp) < since - 1:
+            return ""
+    except (OSError, ValueError):
+        return ""
+    return f"{target}: {reason}"
+
+
+def wait_launch_error(since: float, timeout: float = 6.0) -> str:
+    """Give a launch long enough to fail, then say how. A window that is still
+    up when the time is out has not failed, so this returns "".
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        error = launch_error(since)
+        if error:
+            return error
+        time.sleep(0.25)
+    return ""
+
+
 # A long-lived loop on the far side that re-dumps every session's screen and
 # only speaks when something actually changed. One held-open ssh channel beats
 # polling: a poll pays the round trip on every single check,

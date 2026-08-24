@@ -38,8 +38,10 @@ remote="if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s '$s
 
 # Asking the server whether it has mosh costs a round trip, which is exactly
 # what we are trying to avoid, so the answer is cached for a week.
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/helm"
+
 has_mosh_server() {
-  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/helm/$1.mosh"
+  local cache="$CACHE/$1.mosh"
   mkdir -p "$(dirname "$cache")"
 
   if [[ -f $cache ]] && [[ $(find "$cache" -mtime -7 2>/dev/null) ]]; then
@@ -56,9 +58,38 @@ has_mosh_server() {
   [[ $answer == yes ]]
 }
 
+# A launch that dies takes its own window with it, and the error goes with the
+# window -- which is exactly how a tmux too old for "display-message -d" looked
+# like the key simply doing nothing. So the connection is no longer exec'd: the
+# script stays alive behind it to notice a fast failure, keep the window open
+# with the reason on screen, and leave a note the panel can read.
+errors=$(mktemp)
+trap 'rm -f "$errors"' EXIT
+started=$SECONDS
+
 if [[ ${SSH_CONNECT_NO_MOSH:-0} != 1 ]] && command -v mosh >/dev/null 2>&1 \
    && has_mosh_server "$host"; then
-  exec mosh "$host" -- bash -lc "$remote"
+  mosh "$host" -- bash -lc "$remote" 2> >(tee "$errors" >&2)
+else
+  ssh -t "$host" "$remote" 2> >(tee "$errors" >&2)
+fi
+status=$?
+
+# A session you actually used and then left exits 0, or non-zero for whatever
+# you last ran in it -- neither is a launch failure. A launch failure is a
+# non-zero exit that happens before you could have done anything at all.
+if (( status != 0 )) && (( SECONDS - started < 5 )); then
+  reason=$(grep -v '^[[:space:]]*$' "$errors" | tail -1)
+  reason=${reason:-"exited immediately (status $status)"}
+
+  mkdir -p "$CACHE"
+  printf '%s\t%s/%s\t%s\n' "$(date +%s)" "$host" "$session" "$reason" \
+    > "$CACHE/last-launch-error"
+
+  printf '\n%s\n' "ssh-connect: $host/$session did not start." >&2
+  printf '%s\n\n' "  $reason" >&2
+  read -rsn1 -t 120 -p "press any key to close this window " || true
+  exit "$status"
 fi
 
-exec ssh -t "$host" "$remote"
+exit "$status"
