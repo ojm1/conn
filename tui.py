@@ -8,6 +8,7 @@ nothing here happens silently.
 from __future__ import annotations
 
 import os
+import random
 import subprocess
 import queue
 import threading
@@ -31,6 +32,22 @@ PALETTE = load_palette()
 REFRESH_SECONDS = 45      # full sweep: uptime, disk, mounts, session list
 WATCH_INTERVAL = 1.0      # how often the far side re-checks its screens
 REDRAW_SECONDS = 0.4      # coalescing window for incoming frames
+
+# Reconnecting to a host that will not have us.
+#
+# This used to be a flat 3 seconds, which is 20 connection attempts a minute
+# for as long as the panel is open. On 2026-08-24 that got this laptop's IP
+# banned for ten hours by the fail2ban on a RunCloud box: every stream that is
+# terminated during authentication -- which is what happens each time the panel
+# stops watching a host, or quits -- is logged as "Connection closed by
+# authenticating user [preauth]", and five inside ten minutes is a ban.
+#
+# So: back off, and stay backed off. The ceiling matters more than the floor,
+# because a host that is down stays down for hours, and the panel is left open
+# all day.
+WATCH_RETRY_MIN = 3.0     # first reconnect, for an ordinary dropped link
+WATCH_RETRY_MAX = 300.0   # ceiling: a dead host is probed twice an hour
+WATCH_HEALTHY = 30.0      # a stream that lasted this long was a real one
 SESSIONS_WIDTH = 26       # before the session list is summarised
 NEW_SESSION = "\x00new"   # sentinel from the session picker
 
@@ -491,7 +508,9 @@ class SSHPanel(App):
         check. This pays it once. The far side only speaks when a screen
         actually changed, so an idle host costs nothing at all.
         """
+        delay = WATCH_RETRY_MIN
         while not self.stopping:
+            opened = time.monotonic()
             try:
                 proc = hosts.watch_screens(host, WATCH_INTERVAL)
             except OSError:
@@ -532,7 +551,26 @@ class SSHPanel(App):
             if self.stopping:
                 self.watched.discard(host)
                 return
-            time.sleep(3)      # link dropped -- back off, then reconnect
+
+            # A stream that ran for a while and then dropped is a normal
+            # network event: come back quickly. One that died immediately
+            # means the host is refusing us -- and trying harder is precisely
+            # what turns "refusing us" into "banning us".
+            if time.monotonic() - opened >= WATCH_HEALTHY:
+                delay = WATCH_RETRY_MIN
+            else:
+                delay = min(delay * 2, WATCH_RETRY_MAX)
+
+            # Jitter, so several hosts that dropped together (a laptop waking,
+            # the wifi returning) do not all reconnect on the same beat.
+            self._pause(delay * random.uniform(0.75, 1.25))
+
+    def _pause(self, seconds: float) -> None:
+        """Sleep, but notice a quit. One long sleep here would hold the panel
+        open for as much as five minutes after q."""
+        deadline = time.monotonic() + seconds
+        while not self.stopping and time.monotonic() < deadline:
+            time.sleep(0.25)
 
     def absorb_frame(self, host: str, frame: dict) -> None:
         row = self.rows.get(host)
