@@ -17,7 +17,7 @@ import subprocess
 import time
 from pathlib import Path
 
-import claude_state
+import agent_state
 
 SSH_CONFIG = Path.home() / ".ssh" / "config"
 MNT_ROOT = Path.home() / "mnt"
@@ -293,7 +293,7 @@ def probe(host: str) -> dict:
             "activity": int(bits[3]) if len(bits) > 3 and bits[3].isdigit() else 0,
             "panes": panes.get(name, []),
             "screen": screen,
-            "claude": claude_state.classify(screen, commands),
+            "agent": agent_state.classify(screen, commands),
         })
     return row
 
@@ -437,7 +437,7 @@ def send_text(host: str, session: str, text: str, submit: bool = True) -> None:
     of shell -- and nothing the user types can turn into a remote command.
 
     Enter is sent as a separate keystroke: pasting it as part of the buffer
-    would land as a literal newline inside Claude Code's input box instead of
+    would land as a literal newline inside the agent's input box instead of
     submitting.
     """
     target = shlex.quote(session)

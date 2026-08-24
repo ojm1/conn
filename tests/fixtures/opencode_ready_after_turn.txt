@@ -1,0 +1,34 @@
+
+  ┃
+  ┃  Run the shell command: echo hello
+  ┃
+
+     + Thought: 591ms
+
+     $ echo hello
+
+     ▣  Build · Kimi K2.7 Code
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · Kimi K2.7 Code OpenCode Go
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /home/you/demo7.4K (3%) · $0.00  ctrl+p commands
+

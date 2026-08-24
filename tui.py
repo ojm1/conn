@@ -22,7 +22,7 @@ from textual.screen import ModalScreen
 from textual.widgets import (DataTable, Footer, Header, Input, Label, ListItem,
                              ListView, Static)
 
-import claude_state
+import agent_state
 import hosts
 from theming import load_palette, textual_theme
 
@@ -38,21 +38,21 @@ NEW_SESSION = "\x00new"   # sentinel from the session picker
 
 def state_style(state: str) -> str:
     return {
-        claude_state.WORKING: PALETTE.blue,
-        claude_state.NEEDS_YOU: f"bold {PALETTE.red}",
-        claude_state.DRAFT: f"bold {PALETTE.orange}",
-        claude_state.READY: PALETTE.green,
-        claude_state.SHELL: PALETTE.muted,
+        agent_state.WORKING: PALETTE.blue,
+        agent_state.NEEDS_YOU: f"bold {PALETTE.red}",
+        agent_state.DRAFT: f"bold {PALETTE.orange}",
+        agent_state.READY: PALETTE.green,
+        agent_state.SHELL: PALETTE.muted,
     }.get(state, PALETTE.muted)
 
 
 def state_mark(state: str) -> str:
     return {
-        claude_state.WORKING: "*",
-        claude_state.NEEDS_YOU: "!",
-        claude_state.DRAFT: "!",
-        claude_state.READY: "o",
-        claude_state.SHELL: ".",
+        agent_state.WORKING: "*",
+        agent_state.NEEDS_YOU: "!",
+        agent_state.DRAFT: "!",
+        agent_state.READY: "o",
+        agent_state.SHELL: ".",
     }.get(state, "?")
 
 
@@ -210,12 +210,12 @@ class Help(ModalScreen[None]):
     ]
 
     STATES = [
-        (claude_state.WORKING, "busy, or running background agents -- leave it"),
-        (claude_state.NEEDS_YOU, "blocked on a prompt; nothing moves until you answer"),
-        (claude_state.DRAFT, "text left in the box, never sent -- looks done, isn't"),
-        (claude_state.READY, "empty prompt, waiting for you"),
-        (claude_state.SHELL, "not a Claude Code session"),
-        (claude_state.UNKNOWN, "could not read the screen -- open it and look"),
+        (agent_state.WORKING, "busy, or running background agents -- leave it"),
+        (agent_state.NEEDS_YOU, "blocked on a prompt; nothing moves until you answer"),
+        (agent_state.DRAFT, "text left in the box, never sent -- looks done, isn't"),
+        (agent_state.READY, "empty prompt, waiting for you"),
+        (agent_state.SHELL, "not an agent session -- a plain shell"),
+        (agent_state.UNKNOWN, "could not read the screen -- open it and look"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -232,7 +232,7 @@ class Help(ModalScreen[None]):
 
         text.append("What the marks mean\n", style=PALETTE.heading)
         for state, what in self.STATES:
-            label = claude_state.LABELS.get(state, state)
+            label = agent_state.LABELS.get(state, state)
             text.append(f"  {state_mark(state):<3}", style=state_style(state))
             text.append(f"{label:<14}", style=state_style(state))
             text.append(f"{what}\n")
@@ -552,7 +552,7 @@ class SSHPanel(App):
             if not data:
                 continue
             session["screen"] = data["screen"]
-            session["claude"] = claude_state.classify(
+            session["agent"] = agent_state.classify(
                 data["screen"], data["commands"])
 
         # Rendering happens on a timer instead. A busy host emits several
@@ -622,7 +622,7 @@ class SSHPanel(App):
                 older = previous.get(session["name"])
                 if older and older.get("screen"):
                     session["screen"] = older["screen"]
-                    session["claude"] = older["claude"]
+                    session["agent"] = older["agent"]
 
         self.rows[host] = row
         self.alert_on_changes(row)
@@ -639,13 +639,13 @@ class SSHPanel(App):
         """
         for session in row["sessions"]:
             key = f"{row['host']}/{session['name']}"
-            state = session["claude"]["state"]
+            state = session["agent"]["state"]
             was = self.seen_states.get(key)
             self.seen_states[key] = state
             if was is None or state == was:
                 continue
-            if claude_state.needs_attention(state):
-                self.notify(session["claude"]["detail"][:70] or "waiting for you",
+            if agent_state.needs_attention(state):
+                self.notify(session["agent"]["detail"][:70] or "waiting for you",
                             title=f"{key} needs you",
                             severity="warning", timeout=12)
 
@@ -653,14 +653,14 @@ class SSHPanel(App):
         counts: dict[str, int] = {}
         for row in self.rows.values():
             for session in row["sessions"]:
-                state = session["claude"]["state"]
+                state = session["agent"]["state"]
                 counts[state] = counts.get(state, 0) + 1
 
-        order = [(claude_state.NEEDS_YOU, "need you"),
-                 (claude_state.DRAFT, "unsent"),
-                 (claude_state.WORKING, "working"),
-                 (claude_state.READY, "idle"),
-                 (claude_state.SHELL, "shell")]
+        order = [(agent_state.NEEDS_YOU, "need you"),
+                 (agent_state.DRAFT, "unsent"),
+                 (agent_state.WORKING, "working"),
+                 (agent_state.READY, "idle"),
+                 (agent_state.SHELL, "shell")]
         parts = [f"{counts[state]} {word}" for state, word in order if counts.get(state)]
 
         down = [h for h, r in self.rows.items() if r["state"] == "down"]
@@ -756,7 +756,7 @@ class SSHPanel(App):
             self.chat_rows = self.chats()
             self.listed = [c["host"] for c in self.chat_rows]
             for index, chat in enumerate(self.chat_rows):
-                info = chat["session"]["claude"]
+                info = chat["session"]["agent"]
                 shortcut = str(index + 1) if index < 9 else ""
                 table.add_row(
                     Text(shortcut, style=PALETTE.muted),
@@ -915,7 +915,7 @@ class SSHPanel(App):
             return
 
         session = chat["session"]
-        info = session["claude"]
+        info = session["agent"]
 
         text = Text(no_wrap=True, overflow="ellipsis")
         text.append(f"{chat['label'][:self.detail_width()]}\n",
@@ -927,6 +927,10 @@ class SSHPanel(App):
         text.append("\n")
         if info["tokens"]:
             text.append(f"context {info['tokens']} tokens\n", style=PALETTE.muted)
+        # Worth saying out loud once a host runs more than one kind of agent:
+        # "idle" means different things in different chrome.
+        if info.get("agent"):
+            text.append(f"{info['agent']}\n", style=PALETTE.muted)
         text.append(f"{'attached' if session['attached'] else 'detached'}"
                     f"  -  {ago(session.get('activity', 0))}  -  ",
                     style=PALETTE.muted)
@@ -943,7 +947,7 @@ class SSHPanel(App):
         if screen:
             width = self.detail_width()
             text.append("SCREEN\n", style=PALETTE.heading)
-            # Collapse runs of blank lines -- Claude Code's output is airy, and
+            # Collapse runs of blank lines -- agent output is airy, and
             # the preview is only ~18 lines tall.
             lines = []
             for line in screen.splitlines():
@@ -1043,7 +1047,7 @@ class SSHPanel(App):
     def needy(self) -> list[dict]:
         """Chats blocked on a human: a permission prompt, or an unsent draft."""
         return [chat for chat in self.chats()
-                if claude_state.needs_attention(chat["session"]["claude"]["state"])]
+                if agent_state.needs_attention(chat["session"]["agent"]["state"])]
 
     def action_open_needy(self) -> None:
         """Open every chat that is waiting on you, each in its own window."""
@@ -1103,12 +1107,12 @@ class SSHPanel(App):
         if chat is None:
             return
         host, session = chat["host"], chat["session"]["name"]
-        info = chat["session"]["claude"]
+        info = chat["session"]["agent"]
 
         # An empty box submits whatever is already sitting unsent in the chat,
         # which is the exact fix for a draft you left behind.
         if not text.strip():
-            if info["state"] != claude_state.DRAFT:
+            if info["state"] != agent_state.DRAFT:
                 self.status("nothing to send -- type a reply first")
                 return
             self.status(f"submitting the draft in {chat['label']}...")

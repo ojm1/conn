@@ -1,6 +1,7 @@
 # helm
 
-A terminal dashboard for the servers you keep Claude Code sessions on.
+A terminal dashboard for the servers you keep coding-agent sessions on.
+Reads **Claude Code** and **opencode**.
 
 Named for where you stand to watch every station at once.
 
@@ -26,7 +27,7 @@ chat without attaching to it.
 
 ## Why
 
-If you run Claude Code on remote boxes, the question is never "which server" — it's *"is that chat
+If you run coding agents on remote boxes, the question is never "which server" — it's *"is that chat
 still working, or has it been sitting waiting for me for an hour?"*. Nothing answers that from a
 distance, so this reads it off the screen.
 
@@ -38,15 +39,34 @@ distance, so this reads it off the screen.
 | `!` | needs you | Blocked on a permission prompt. |
 | `!` | unsent draft | Text left in the box, never submitted — looks done, isn't. |
 | `o` | idle | Empty prompt, waiting. |
-| `.` | shell | Not a Claude Code session. |
+| `.` | shell | Not an agent session — a plain shell. |
 
-**How it works, and its limit.** There is no API for this. `claude_state.py` reads the session's
-visible screen from `tmux capture-pane` and matches markers — `esc to interrupt` for busy,
-`N/M agents done` for background work, and the input box (the region fenced by the last two
-horizontal rules) for unsent text. Anything unrecognised reports **unknown**, never idle: claiming a
-blocked chat is idle is the one failure that would make the tool worse than not looking.
+**How it works, and its limit.** There is no API for this. `agent_state.py` reads the session's
+visible screen from `tmux capture-pane` and matches markers. The states above are shared; the
+markers are per-agent, because the two draw nothing alike:
 
-A Claude Code redesign can break these markers.
+| | Claude Code | opencode |
+|---|---|---|
+| busy | `esc to interrupt` | `esc interrupt` in the footer |
+| blocked | `Do you want to…`, `1. Yes` | `Permission required`, `Allow once / Reject` |
+| the input box | between the last two horizontal rules | the `┃` run above the `╹▀▀▀` rule |
+| empty box | the `Try "…"` placeholder | the `Ask anything…` placeholder |
+| context used | `275.1k tokens` | `7.4K (3%)` in the footer |
+
+Which agent a session is running comes from the pane's command, so a shell is settled without
+guessing from pixels. Background agent fleets (`N/M agents done`) are read for Claude Code only —
+opencode's equivalent has not been captured yet, so a session of its own is never reported as busy
+on that basis.
+
+Anything unrecognised reports **unknown**, never idle: claiming a blocked chat is idle is the one
+failure that would make the tool worse than not looking.
+
+A redesign on either side can break these markers. `tests/test_agent_state.py` runs the reader
+against real captured screens — `python3 tests/test_agent_state.py`, no test dependencies — so a
+break shows up as a failure rather than as a quietly wrong dashboard.
+
+Adding a third agent means writing its patterns as a class in `agent_state.py`; the callers do not
+change.
 
 ## Live, not polled
 
@@ -80,7 +100,7 @@ tmux load-buffer -b reply -  &&  tmux paste-buffer -t <session> -d  &&  tmux sen
 
 So quotes, `$VAR`, backticks and semicolons arrive verbatim and nothing you type can become a remote
 command. `Enter` is a separate keystroke on purpose — pasted as part of the buffer it lands as a
-literal newline inside Claude Code's input box instead of submitting.
+literal newline inside the agent's input box instead of submitting.
 
 ## Install
 
