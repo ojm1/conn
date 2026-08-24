@@ -1,0 +1,30 @@
+#!/bin/bash
+# Pick a saved host with fzf and connect (tmux-backed).
+# Usage: ssh-menu [session-name]
+set -uo pipefail
+
+session=${1:-claude}
+hosts=$(ssh-hosts)
+
+if [[ -z $hosts ]]; then
+  echo "No hosts defined yet in ~/.ssh/config."
+  echo "Add a block like:"
+  echo ""
+  echo "  Host my-vps"
+  echo "      HostName 203.0.113.10"
+  echo "      User root"
+  echo ""
+  read -rsn1 -p "Press any key to close..."
+  exit 1
+fi
+
+host=$(printf '%s\n' "$hosts" | fzf \
+  --prompt="ssh > " \
+  --height=100% \
+  --border=rounded \
+  --header="enter = connect   esc = cancel   (session: $session)" \
+  --preview='ssh -G {} | awk "/^(hostname|user|port) /{printf \"%-10s %s\n\", \$1, \$2}"' \
+  --preview-window=down,4,border-top)
+
+[[ -z $host ]] && exit 0
+exec ssh-connect "$host" "$session"

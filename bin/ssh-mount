@@ -1,0 +1,57 @@
+#!/bin/bash
+# Mount a remote host as a local folder under ~/mnt/<host> (drag-and-drop in
+# Nautilus, edit remote files with local tools). This is the SFTP replacement.
+#
+# Usage:  ssh-mount <host> [remote-path]     default remote-path: the login dir
+#         ssh-mount -u <host>                unmount
+set -uo pipefail
+
+if ! command -v sshfs >/dev/null 2>&1; then
+  echo "sshfs is not installed. Install it with:  omarchy pkg add sshfs"
+  exit 1
+fi
+
+if [[ ${1:-} == "-u" || ${1:-} == "--unmount" ]]; then
+  host=${2:?usage: ssh-mount -u <host>}
+  mnt="$HOME/mnt/$host"
+
+  if ! mountpoint -q "$mnt"; then
+    echo "not mounted: $mnt"
+    rmdir "$mnt" 2>/dev/null
+    exit 0
+  fi
+
+  # A mount can be briefly busy right after use. Try clean first, then lazy,
+  # which detaches now and releases once the last user lets go.
+  if ! err=$(fusermount3 -u "$mnt" 2>&1); then
+    if ! err=$(fusermount3 -uz "$mnt" 2>&1); then
+      echo "could not unmount $mnt: $err" >&2
+      echo "something is still using it -- try:  fuser -vm $mnt" >&2
+      exit 1
+    fi
+  fi
+
+  echo "unmounted $mnt"
+  rmdir "$mnt" 2>/dev/null
+  exit 0
+fi
+
+host=${1:?usage: ssh-mount <host> [remote-path]}
+remote=${2:-}
+mnt="$HOME/mnt/$host"
+
+if mountpoint -q "$mnt"; then
+  echo "already mounted: $mnt"
+  exit 0
+fi
+
+mkdir -p "$mnt"
+sshfs "$host:$remote" "$mnt" \
+  -o reconnect \
+  -o ServerAliveInterval=15 \
+  -o ServerAliveCountMax=3 \
+  -o follow_symlinks \
+  -o idmap=user \
+  -o dir_cache=yes
+
+echo "mounted $host:${remote:-~} at $mnt"

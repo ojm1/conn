@@ -1,0 +1,30 @@
+#!/bin/bash
+# Open one terminal per host, tiled on the current Hyprland workspace.
+# Usage: ssh-grid staging web-01 [...]
+#        ssh-grid --all          (every host in ~/.ssh/config)
+set -uo pipefail
+
+if [[ ${1:-} == "--all" ]]; then
+  mapfile -t hosts < <(ssh-hosts)
+else
+  hosts=("$@")
+fi
+
+if [[ ${#hosts[@]} -eq 0 ]]; then
+  echo "usage: ssh-grid <host> [host...]   |   ssh-grid --all"
+  exit 1
+fi
+
+launch() {
+  # Use Omarchy's terminal launcher so it honours your configured terminal/styling
+  if command -v omarchy-launch-tui >/dev/null 2>&1; then
+    omarchy-launch-tui --app-id=org.omarchy.ssh-session "$@" >/dev/null 2>&1 &
+  else
+    foot -a ssh-session "$@" >/dev/null 2>&1 &
+  fi
+}
+
+for host in "${hosts[@]}"; do
+  launch ssh-connect "$host"
+  sleep 0.35   # let Hyprland place each window before the next one spawns
+done

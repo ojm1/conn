@@ -1,0 +1,9 @@
+#!/bin/bash
+# Print the host aliases defined in ~/.ssh/config (skips wildcard patterns).
+set -uo pipefail
+awk '
+  tolower($1) == "host" {
+    for (i = 2; i <= NF; i++)
+      if ($i !~ /[*?!]/) print $i
+  }
+' ~/.ssh/config 2>/dev/null | sort -u

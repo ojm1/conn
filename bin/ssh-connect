@@ -1,0 +1,58 @@
+#!/bin/bash
+# Connect to a host and attach to a persistent tmux session on the remote.
+# Usage: ssh-connect <host> [session-name]
+#
+# The session keeps running on the server if the link drops, your laptop
+# sleeps, or you close the window -- reconnect and you are back where you were.
+#
+# Uses mosh when both ends have it, because it echoes your keystrokes locally
+# instead of waiting a round trip for the server to say what you typed. On a
+# high-latency link that is the difference between typing
+# and dictating. Set SSH_CONNECT_NO_MOSH=1 to force plain ssh.
+
+set -uo pipefail
+
+host=${1:?usage: ssh-connect <host> [session-name]}
+session=${2:-claude}
+
+# Keep the session name shell-safe
+session=${session//[^A-Za-z0-9_-]/_}
+
+# Name the terminal window. Without this every window is titled "foot" and a
+# screen full of them is unreadable. tmux leaves the title alone (set-titles is
+# off by default), so what we set here survives the attach.
+printf '\033]0;%s\007' "$host/$session"
+
+# On attach, tmux flashes how to get back out. Without this the panel's hint
+# vanishes the moment the remote session takes the screen, and there is nothing
+# left telling you which key returns you to the list.
+banner="F12  or  ctrl-b d   =   back to the server panel"
+
+remote="if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s '$session' \\; bind-key -n F12 detach-client \\; set-option -t '$session' status-left-length 40 \\; set-option -t '$session' status-left '[$host/$session] ' \\; display-message -d 5000 '$banner'; else echo '(tmux not installed on this host -- plain shell)'; echo '(type exit to return to the panel)'; exec \$SHELL -l; fi"
+
+# Asking the server whether it has mosh costs a round trip, which is exactly
+# what we are trying to avoid, so the answer is cached for a week.
+has_mosh_server() {
+  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/helm/$1.mosh"
+  mkdir -p "$(dirname "$cache")"
+
+  if [[ -f $cache ]] && [[ $(find "$cache" -mtime -7 2>/dev/null) ]]; then
+    [[ $(cat "$cache") == yes ]]
+    return
+  fi
+
+  local answer=no
+  if ssh -o BatchMode=yes -o ConnectTimeout=6 "$1" \
+       'command -v mosh-server >/dev/null 2>&1' 2>/dev/null; then
+    answer=yes
+  fi
+  printf '%s' "$answer" > "$cache"
+  [[ $answer == yes ]]
+}
+
+if [[ ${SSH_CONNECT_NO_MOSH:-0} != 1 ]] && command -v mosh >/dev/null 2>&1 \
+   && has_mosh_server "$host"; then
+  exec mosh "$host" -- bash -lc "$remote"
+fi
+
+exec ssh -t "$host" "$remote"
