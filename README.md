@@ -4,6 +4,9 @@ A terminal dashboard for the servers you keep Claude Code sessions on.
 
 Named for where you stand to watch every station at once.
 
+Installed as `helm` -- the command is `helm`. The repository is named `helm-tui` only so it
+does not collide with the Kubernetes package manager, which this is unrelated to.
+
 It lists every `tmux` session across every host in your `~/.ssh/config`, tells you **which ones are
 working and which are waiting on you**, shows each session's live screen, and lets you reply to a
 chat without attaching to it.
