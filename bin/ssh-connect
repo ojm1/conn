@@ -26,9 +26,15 @@ printf '\033]0;%s\007' "$host/$session"
 # On attach, tmux flashes how to get back out. Without this the panel's hint
 # vanishes the moment the remote session takes the screen, and there is nothing
 # left telling you which key returns you to the list.
+#
+# The banner's five seconds come from setting display-time rather than from
+# "display-message -d 5000": -d arrived in tmux 3.2, and because these commands
+# are chained with \;, an older tmux rejects the whole chain -- so the session
+# never starts, ssh exits, and the new window shuts instantly. display-time is
+# as old as tmux. Debian 10 / Ubuntu 20.04 still ship 3.0a.
 banner="F12  or  ctrl-b d   =   back to the server panel"
 
-remote="if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s '$session' \\; bind-key -n F12 detach-client \\; set-option -t '$session' status-left-length 40 \\; set-option -t '$session' status-left '[$host/$session] ' \\; display-message -d 5000 '$banner'; else echo '(tmux not installed on this host -- plain shell)'; echo '(type exit to return to the panel)'; exec \$SHELL -l; fi"
+remote="if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s '$session' \\; bind-key -n F12 detach-client \\; set-option -t '$session' status-left-length 40 \\; set-option -t '$session' status-left '[$host/$session] ' \\; set-option -t '$session' display-time 5000 \\; display-message '$banner'; else echo '(tmux not installed on this host -- plain shell)'; echo '(type exit to return to the panel)'; exec \$SHELL -l; fi"
 
 # Asking the server whether it has mosh costs a round trip, which is exactly
 # what we are trying to avoid, so the answer is cached for a week.
