@@ -24,6 +24,7 @@ import time
 import gi
 
 gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 gi.require_version("Vte", "3.91")
 
 from gi.repository import Gdk, GLib, Gtk, Pango, Vte  # noqa: E402
@@ -108,11 +109,24 @@ class Session(Gtk.Box):
             # SEARCH_PATH because the argv names ssh-connect and bash rather
             # than spelling out where they live.
             GLib.SpawnFlags.SEARCH_PATH,
-            None, None,
-            -1,
-            None,
-            None, None,
+            # The introspected signature omits child_setup_data, but the
+            # marshaller wants it: the positional list here is the C one.
+            None,      # child_setup
+            None,      # child_setup_data
+            -1,        # no timeout: a slow host is not a failed spawn
+            None,      # cancellable
+            self._spawned,
         )
+
+    def _spawned(self, _term, pid, error, _data=None):
+        """A spawn that fails leaves an empty black rectangle and no clue.
+
+        Saying so in the terminal itself puts the reason where the session
+        would have been, which is where you are already looking.
+        """
+        if error is not None:
+            self.term.feed(f"\r\n  could not start {self.host}/{self.name}:"
+                           f"\r\n  {error.message}\r\n".encode())
 
     def _exited(self, _term, _status):
         self.on_exit(self)
@@ -269,8 +283,11 @@ class Helm(Gtk.ApplicationWindow):
 
     def _host_row(self, host: str, data: dict) -> Gtk.ListBoxRow:
         row = Gtk.ListBoxRow()
-        row.key = None                      # not activatable: nothing to open
+        # A host is a heading, not a destination: there is nothing to open on
+        # it, so it neither highlights nor answers a click.
+        row.key = None
         row.set_activatable(False)
+        row.set_selectable(False)
         box = Gtk.Box(spacing=8)
         label = Gtk.Label(label=host, xalign=0)
         label.add_css_class("host")
