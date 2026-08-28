@@ -34,6 +34,15 @@ import hosts  # noqa: E402
 from theming import load_palette  # noqa: E402
 
 APP_ID = "org.omarchy.helm"
+HOME_PAGE = "https://www.ojm.co"
+SOURCE = "https://github.com/ojm1/helm-tui"
+
+# U+2388 is, literally, the helm symbol -- a ship's wheel, which is where the
+# name comes from. The wordmark under it is box-drawing rather than an image
+# so it takes the theme's accent colour like everything else.
+WORDMARK = """╻ ╻┏━╸╻  ┏┳┓
+┣━┫┣╸ ┃  ┃┃┃
+╹ ╹┗━╸┗━╸╹ ╹"""
 
 REFRESH_SECONDS = 45     # the full sweep: uptime, disk, the session list
 WATCH_INTERVAL = 1.0     # how often the far side re-dumps a screen
@@ -173,9 +182,7 @@ class Helm(Gtk.ApplicationWindow):
 
     def _build(self) -> None:
         header = Gtk.HeaderBar()
-        self.subtitle = Gtk.Label(label="")
-        self.subtitle.add_css_class("subtitle")
-        header.set_title_widget(self.subtitle)
+        header.set_title_widget(Gtk.Label(label=""))
 
         new = Gtk.Button(icon_name="list-add-symbolic")
         new.set_tooltip_text("New session on the selected host")
@@ -192,10 +199,6 @@ class Helm(Gtk.ApplicationWindow):
         refresh.connect("clicked", lambda _b: self.load_hosts())
         header.pack_end(refresh)
 
-        guide = Gtk.MenuButton(icon_name="help-about-symbolic")
-        guide.set_tooltip_text("What the marks mean, and the keys")
-        guide.set_popover(self._guide())
-        header.pack_end(guide)
         self.set_titlebar(header)
 
         self.list = Gtk.ListBox()
@@ -203,10 +206,17 @@ class Helm(Gtk.ApplicationWindow):
         self.list.connect("row-activated", self.row_activated)
         self.list.add_css_class("sidebar")
 
-        side = Gtk.ScrolledWindow()
-        side.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        side.set_child(self.list)
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_child(self.list)
+        scroller.set_vexpand(True)
+
+        side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        side.add_css_class("side")
         side.set_size_request(300, -1)
+        side.append(self._wordmark())
+        side.append(scroller)
+        side.append(self._footer())
 
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
@@ -273,8 +283,39 @@ class Helm(Gtk.ApplicationWindow):
             hint.add_css_class("detail")
             grid.attach(hint, 2, row, 1, 1)
 
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.append(grid)
+
+        rule = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        rule.set_margin_start(12)
+        rule.set_margin_end(12)
+        box.append(rule)
+
+        credits = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
+                          margin_bottom=12, margin_start=12, margin_end=12)
+        blurb = Gtk.Label(
+            label="helm -- the servers you keep coding agents on, and whether "
+                  "they are working or waiting on you.", xalign=0)
+        blurb.add_css_class("detail")
+        blurb.set_wrap(True)
+        blurb.set_max_width_chars(46)
+        credits.append(blurb)
+
+        links = Gtk.Box(spacing=12, margin_top=4)
+        for label, uri in (("www.ojm.co", HOME_PAGE), ("source", SOURCE)):
+            link = Gtk.LinkButton(uri=uri, label=label)
+            link.set_has_frame(False)
+            link.add_css_class("link")
+            links.append(link)
+        credits.append(links)
+
+        holder = Gtk.Label(label="(c) 2026 Owen McCrink  --  MIT", xalign=0)
+        holder.add_css_class("detail")
+        credits.append(holder)
+        box.append(credits)
+
         popover = Gtk.Popover()
-        popover.set_child(grid)
+        popover.set_child(box)
         return popover
 
     # -- acting on a session -----------------------------------------------
@@ -522,6 +563,52 @@ class Helm(Gtk.ApplicationWindow):
                 return
             index += 1
 
+    def _wordmark(self) -> Gtk.Widget:
+        """The name, drawn rather than written.
+
+        A list of servers is a utility; the thing you look at all day may as
+        well say what it is. It doubles as the count of what is waiting, which
+        is the one number worth reading from across the room.
+        """
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
+                      margin_top=14, margin_bottom=10,
+                      margin_start=14, margin_end=14)
+
+        top = Gtk.Box(spacing=10)
+        wheel = Gtk.Label(label="\u2388")
+        wheel.add_css_class("wheel")
+        wheel.set_valign(Gtk.Align.CENTER)
+        top.append(wheel)
+
+        mark = Gtk.Label(label=WORDMARK, xalign=0)
+        mark.add_css_class("wordmark")
+        top.append(mark)
+        box.append(top)
+
+        self.subtitle = Gtk.Label(label="", xalign=0)
+        self.subtitle.add_css_class("tagline")
+        box.append(self.subtitle)
+        return box
+
+    def _footer(self) -> Gtk.Widget:
+        """Help sits at the bottom of the list, where it is out of the way
+        until the moment you want it."""
+        bar = Gtk.Box(spacing=6, margin_top=6, margin_bottom=8,
+                      margin_start=10, margin_end=10)
+        bar.add_css_class("footer")
+
+        help_button = Gtk.MenuButton(label="?")
+        help_button.add_css_class("help")
+        help_button.set_tooltip_text("What the marks mean, the keys, and who wrote it")
+        help_button.set_popover(self._guide())
+        bar.append(help_button)
+
+        self.footnote = Gtk.Label(label="", xalign=0)
+        self.footnote.add_css_class("detail")
+        self.footnote.set_hexpand(True)
+        bar.append(self.footnote)
+        return bar
+
     def _style(self) -> None:
         """Take the desktop's colours rather than GTK's.
 
@@ -534,7 +621,18 @@ class Helm(Gtk.ApplicationWindow):
         headerbar {{ background: {p.panel}; color: {p.foreground};
                      border-bottom: 1px solid {p.surface}; }}
         .subtitle {{ color: {p.muted}; font-size: 0.9em; }}
-        .sidebar {{ background: {p.panel}; }}
+        .side {{ background: {p.panel};
+                 border-right: 1px solid {p.surface}; }}
+        .sidebar {{ background: transparent; }}
+        .wheel {{ color: {p.accent}; font-size: 1.9em; }}
+        .wordmark {{ color: {p.accent}; font-family: monospace;
+                     font-size: 0.78em; line-height: 1.0; }}
+        .tagline {{ color: {p.muted}; font-size: 0.85em; padding-top: 4px; }}
+        .tagline.waiting {{ color: {p.red}; }}
+        .footer {{ border-top: 1px solid {p.surface}; }}
+        .help {{ font-family: monospace; font-weight: bold;
+                 color: {p.accent}; min-width: 26px; }}
+        .link {{ color: {p.accent}; font-size: 0.85em; padding: 0; }}
         .sidebar row {{ padding: 2px 10px; }}
         .sidebar row:selected {{ background: {p.accent}; color: {p.background}; }}
         .host {{ color: {p.muted}; font-weight: bold;
@@ -597,6 +695,15 @@ class Helm(Gtk.ApplicationWindow):
         self.slots = slots
         self.subtitle.set_text(
             f"{waiting} waiting on you" if waiting else "nothing waiting")
+        # The one number worth reading from across the room, so it is allowed
+        # to be the one coloured thing up there.
+        if waiting:
+            self.subtitle.add_css_class("waiting")
+        else:
+            self.subtitle.remove_css_class("waiting")
+        live = sum(1 for host in self.order if self.rows[host]["state"] == "up")
+        self.footnote.set_text(
+            f"{live}/{len(self.order)} hosts  ·  {len(slots)} sessions")
 
         if shape == self.shape:
             self.repaint()

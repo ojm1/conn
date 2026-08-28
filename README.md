@@ -108,6 +108,19 @@ the one attach that cannot go anywhere.
 
 ## In the window
 
+```
+  ⎈  ╻ ╻┏━╸╻  ┏┳┓        1  o  shell        idle
+     ┣━┫┣╸ ┃  ┃┃┃        2  !  claude       needs you
+     ╹ ╹┗━╸┗━╸╹ ╹        3  *  shell        working
+     2 waiting on you    ...
+                         ?  6/7 hosts · 12 sessions
+```
+
+U+2388 is, literally, the helm symbol. The `?` at the foot of the list has the marks, the keys and
+who wrote it.
+
+## Keys and actions
+
 | | Does |
 |---|---|
 | `alt-1`..`alt-9` | Open the session with that number in the list |
