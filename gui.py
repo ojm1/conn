@@ -170,6 +170,7 @@ class Helm(Gtk.ApplicationWindow):
         self._shortcuts()
 
         self.load_hosts()
+        self.check_agent()
         GLib.timeout_add_seconds(REFRESH_SECONDS, self.sweep_tick)
         # The stream can speak several times a second on a busy host. Draining
         # it on a timer rather than on arrival keeps the list from rebuilding
@@ -341,13 +342,26 @@ class Helm(Gtk.ApplicationWindow):
             return
         host, name = key
 
+        self.popup(row, x, y, [
+            ("Open", lambda: self.open_session(host, name), False),
+            (f"Kill {host}/{name}...",
+             lambda: self.confirm_kill(host, name), True),
+        ])
+
+    def host_menu(self, row, host: str, x: float, y: float) -> None:
+        self.popup(row, x, y, [
+            ("New session...", lambda: self.prompt_new_session(host), False),
+            ("Passwords and keys...", lambda: self.show_secrets(host), False),
+        ])
+
+    def popup(self, row, x: float, y: float, items) -> None:
+        """One popover for both menus, parented to the list rather than to a
+        row -- rows are replaced when the session list changes, and a popover
+        whose parent goes with them cannot be clicked."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
                       margin_top=6, margin_bottom=6,
                       margin_start=6, margin_end=6)
         popover = Gtk.Popover()
-        # Parented to the list, not to the row: rows are replaced whenever the
-        # session list itself changes, and a popover whose parent is destroyed
-        # goes with it -- which looked like the menu refusing to be clicked.
         popover.set_parent(self.list)
         point = Gdk.Rectangle()
         allocation = row.get_allocation()
@@ -357,20 +371,152 @@ class Helm(Gtk.ApplicationWindow):
         popover.set_pointing_to(point)
         popover.connect("closed", lambda pop: pop.unparent())
 
-        def item(label, handler, destructive=False):
+        for label, handler, destructive in items:
             button = Gtk.Button(label=label)
             button.set_has_frame(False)
             button.get_child().set_xalign(0)
             if destructive:
                 button.add_css_class("destructive")
-            button.connect("clicked", lambda _b: (popover.popdown(), handler()))
+            button.connect("clicked",
+                           lambda _b, h=handler: (popover.popdown(), h()))
             box.append(button)
-
-        item("Open", lambda: self.open_session(host, name))
-        item(f"Kill {host}/{name}...", lambda: self.confirm_kill(host, name),
-             destructive=True)
         popover.set_child(box)
         popover.popup()
+
+    # -- what is filed against a host --------------------------------------
+
+    def show_secrets(self, host: str) -> None:
+        """Whatever you keep for this host, read out of the desktop keyring.
+
+        Nothing is stored by helm and nothing is held in memory once the
+        window closes: a value is fetched when you ask to see it and the
+        field is emptied again on Hide. The keyring is already unlocked by
+        your login password, which is the single password this all hangs on.
+        """
+        window = Gtk.Window(title=f"{host} -- passwords and keys",
+                            transient_for=self, modal=True)
+        window.set_default_size(460, 320)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
+                        margin_top=14, margin_bottom=14,
+                        margin_start=14, margin_end=14)
+
+        listing = Gtk.ListBox()
+        listing.set_selection_mode(Gtk.SelectionMode.NONE)
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_child(listing)
+        scroller.set_vexpand(True)
+        outer.append(scroller)
+
+        def refill():
+            while (child := listing.get_first_child()) is not None:
+                listing.remove(child)
+            names = hosts.secret_names(host)
+            if not names:
+                empty = Gtk.Label(
+                    label="Nothing kept for this host yet.", xalign=0)
+                empty.add_css_class("detail")
+                listing.append(empty)
+            for name in names:
+                listing.append(entry_row(name))
+
+        def entry_row(name: str) -> Gtk.Widget:
+            line = Gtk.Box(spacing=8, margin_top=4, margin_bottom=4)
+            title = Gtk.Label(label=name, xalign=0)
+            title.set_size_request(110, -1)
+            line.append(title)
+
+            shown = Gtk.Label(label="\u2022" * 8, xalign=0, selectable=True)
+            shown.add_css_class("secret")
+            shown.set_hexpand(True)
+            shown.set_ellipsize(Pango.EllipsizeMode.END)
+            line.append(shown)
+
+            reveal = Gtk.Button(label="Show")
+
+            def toggle(_button):
+                if reveal.get_label() == "Show":
+                    try:
+                        shown.set_label(hosts.secret_value(host, name))
+                    except hosts.HostError as exc:
+                        self.complain(f"{host}/{name}", str(exc))
+                        return
+                    reveal.set_label("Hide")
+                else:
+                    shown.set_label("\u2022" * 8)
+                    reveal.set_label("Show")
+
+            reveal.connect("clicked", toggle)
+            line.append(reveal)
+
+            copy = Gtk.Button(label="Copy")
+
+            def to_clipboard(_button):
+                try:
+                    value = hosts.secret_value(host, name)
+                except hosts.HostError as exc:
+                    self.complain(f"{host}/{name}", str(exc))
+                    return
+                clipboard = Gdk.Display.get_default().get_clipboard()
+                clipboard.set(value)
+                copy.set_label("Copied")
+                # Cleared again shortly: a password left on the clipboard is
+                # readable by anything that asks for it.
+                def wipe():
+                    if clipboard.get_content() is not None:
+                        clipboard.set("")
+                    copy.set_label("Copy")
+                    return False
+                GLib.timeout_add_seconds(30, wipe)
+
+            copy.connect("clicked", to_clipboard)
+            line.append(copy)
+
+            remove = Gtk.Button(label="Forget")
+            remove.add_css_class("destructive")
+
+            def forget(_button):
+                try:
+                    hosts.secret_clear(host, name)
+                except hosts.HostError as exc:
+                    self.complain(f"{host}/{name}", str(exc))
+                    return
+                refill()
+
+            remove.connect("clicked", forget)
+            line.append(remove)
+            return line
+
+        def add(_button):
+            def store(values):
+                try:
+                    hosts.secret_store(host, values["Name"], values["Value"])
+                except hosts.HostError as exc:
+                    self.complain("Could not store", str(exc))
+                    return
+                refill()
+            self.ask(f"Keep for {host}", [("Name", ""), ("Value", "")], store,
+                     secret="Value")
+
+        buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
+        new = Gtk.Button(label="Add...")
+        new.connect("clicked", add)
+        close = Gtk.Button(label="Close")
+        close.connect("clicked", lambda _b: window.close())
+        buttons.append(new)
+        buttons.append(close)
+        outer.append(buttons)
+
+        note = Gtk.Label(
+            label="Kept in the desktop keyring, which your login password "
+                  "unlocks. helm stores nothing itself.", xalign=0)
+        note.add_css_class("detail")
+        note.set_wrap(True)
+        outer.append(note)
+
+        refill()
+        window.set_child(outer)
+        window.present()
+        return window
 
     def confirm_kill(self, host: str, name: str) -> None:
         """Ask first. A killed session takes whatever it was doing with it,
@@ -417,8 +563,8 @@ class Helm(Gtk.ApplicationWindow):
 
     # -- new session, new host ---------------------------------------------
 
-    def prompt_new_session(self) -> None:
-        host = self.selected_host()
+    def prompt_new_session(self, host: str | None = None) -> None:
+        host = host or self.selected_host()
         self.ask(f"New session on {host}", [("Name", "shell")],
                  lambda values: self.open_session(host, values["Name"]))
 
@@ -437,7 +583,8 @@ class Helm(Gtk.ApplicationWindow):
         self.ask("Add a server", [("Name", ""), ("Hostname", ""),
                                   ("User", ""), ("Port", "22")], add)
 
-    def ask(self, title: str, fields: list[tuple[str, str]], done) -> None:
+    def ask(self, title: str, fields: list[tuple[str, str]], done,
+            secret: str = "") -> None:
         """A small modal form. GTK has no one-line prompt, and four of these
         are cheaper than four hand-built dialogs."""
         window = Gtk.Window(title=title, transient_for=self, modal=True)
@@ -450,6 +597,8 @@ class Helm(Gtk.ApplicationWindow):
             name = Gtk.Label(label=label, xalign=0)
             name.set_size_request(90, -1)
             entry = Gtk.Entry()
+            if label == secret:
+                entry.set_visibility(False)
             entry.set_text(initial)
             entry.set_hexpand(True)
             entries[label] = entry
@@ -607,7 +756,42 @@ class Helm(Gtk.ApplicationWindow):
         self.footnote.add_css_class("detail")
         self.footnote.set_hexpand(True)
         bar.append(self.footnote)
+
+        # Shown only when there is nothing to unlock it with. A padlock that
+        # is always there stops being read.
+        self.unlock = Gtk.Button(label="unlock key")
+        self.unlock.add_css_class("locked")
+        self.unlock.set_tooltip_text(
+            "The ssh agent is holding no keys, so every host will refuse you. "
+            "This runs ssh-add in a terminal -- the passphrase goes to it, "
+            "never through helm.")
+        self.unlock.set_visible(False)
+        self.unlock.connect("clicked", lambda _b: self.do_unlock())
+        bar.append(self.unlock)
         return bar
+
+    def do_unlock(self) -> None:
+        hosts.unlock_agent()
+        # The terminal outlives this call, so the state is re-read shortly
+        # after rather than now, when it would still say locked.
+        GLib.timeout_add_seconds(6, lambda: (self.check_agent(), False)[1])
+
+    def check_agent(self) -> None:
+        def look():
+            keys = hosts.agent_keys()
+            GLib.idle_add(self.show_agent, keys)
+        threading.Thread(target=look, daemon=True).start()
+
+    def show_agent(self, keys) -> bool:
+        """None is no agent at all, 0 is an agent holding nothing. Both mean
+        key authentication is going to fail, which is worth saying before
+        seven hosts turn red for no visible reason."""
+        locked = not keys
+        self.unlock.set_visible(locked)
+        if locked:
+            self.unlock.set_label(
+                "no ssh agent" if keys is None else "unlock key")
+        return GLib.SOURCE_REMOVE
 
     def _style(self) -> None:
         """Take the desktop's colours rather than GTK's.
@@ -633,6 +817,8 @@ class Helm(Gtk.ApplicationWindow):
         .help {{ font-family: monospace; font-weight: bold;
                  color: {p.accent}; min-width: 26px; }}
         .link {{ color: {p.accent}; font-size: 0.85em; padding: 0; }}
+        .locked {{ color: {p.red}; font-size: 0.8em; padding: 2px 8px; }}
+        .secret {{ font-family: monospace; }}
         .sidebar row {{ padding: 2px 10px; }}
         .sidebar row:selected {{ background: {p.accent}; color: {p.background}; }}
         .host {{ color: {p.muted}; font-weight: bold;
@@ -773,6 +959,12 @@ class Helm(Gtk.ApplicationWindow):
             tail = Gtk.Label(label=note, xalign=0)
             tail.add_css_class("detail")
             box.append(tail)
+        menu = Gtk.GestureClick()
+        menu.set_button(3)
+        menu.connect("pressed",
+                     lambda _g, _n, x, y, r=row, h=host: self.host_menu(r, h, x, y))
+        row.add_controller(menu)
+
         row.set_child(box)
         return row
 
@@ -866,6 +1058,7 @@ class Helm(Gtk.ApplicationWindow):
 
     def sweep_tick(self) -> bool:
         self.sweep()
+        self.check_agent()
         return GLib.SOURCE_CONTINUE
 
     def sweep(self) -> None:

@@ -148,6 +148,19 @@ column is blank rather than promising a key that does not exist.
 | `n` `r` `f` `u` `a` `k` `e` | New shell, refresh, mount, unmount, add host, install key, edit config |
 | `?` | Full key guide, in the app |
 
+## The one password
+
+helm never sees it. Your ssh key is unlocked once -- by the desktop keyring at login -- and every
+`ssh` it spawns rides the agent, which is why no host prompts you. If the agent is holding nothing,
+the foot of the list says so and offers to run `ssh-add` in a terminal of its own: the passphrase
+goes from your keyboard to `ssh-add`, never through helm.
+
+Right-click a host for **passwords and keys** -- whatever else you keep for it: a database password,
+an API key. They live in the desktop keyring, which the same login password already unlocks, so
+"one password for all of it" is the arrangement that exists rather than a thing to build. helm
+stores nothing itself: a value is fetched when you press Show, masked again on Hide, and a copy is
+wiped off the clipboard after thirty seconds.
+
 ## Replying safely
 
 Text is sent as a **tmux buffer**, never interpolated into a command line:

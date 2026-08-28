@@ -656,6 +656,114 @@ def send_key(host: str, session: str, key: str) -> None:
         raise HostError(message.splitlines()[-1] if message else "send failed")
 
 
+# ---------------------------------------------------------------------------
+# The agent, and the secrets beside it
+# ---------------------------------------------------------------------------
+
+def agent_keys() -> int | None:
+    """How many identities the ssh agent is holding, or None if there is no
+    agent to ask.
+
+    This is the whole of helm's involvement with your passphrase. The key is
+    unlocked once -- by the desktop keyring at login, or by the button below
+    -- and every ssh spawned from here rides the agent. Holding the passphrase
+    ourselves would add a second copy of it and protect nothing.
+    """
+    try:
+        done = subprocess.run(["ssh-add", "-l"], stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode == 2:          # could not talk to an agent at all
+        return None
+    if done.returncode == 1:          # agent is there, holding nothing
+        return 0
+    return len([line for line in done.stdout.splitlines() if line.strip()])
+
+
+def unlock_agent() -> None:
+    """Ask ssh-add for the passphrase, in a terminal of its own.
+
+    Deliberately not a dialog of ours: the prompt belongs to ssh-add and the
+    keyring, so the passphrase goes from your keyboard to them without helm
+    ever being on the path.
+    """
+    launch(["bash", "-lc",
+            "ssh-add; echo; read -rsn1 -p 'Press any key to close...'"])
+
+
+# Secrets live in the desktop keyring, which your login password already
+# unlocks -- so "one password for everything" is not a feature to build here,
+# it is the arrangement that exists. helm stores nothing itself and reads a
+# value only when you ask to see it.
+SECRET_APP = "helm"
+
+
+def secret_names(host: str) -> list[str]:
+    """What is filed against this host. Names only -- the values stay put
+    until something asks for one by name."""
+    try:
+        done = subprocess.run(
+            ["secret-tool", "search", "--all",
+             "application", SECRET_APP, "host", host],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    # secret-tool prints the attributes on stderr and everything else on
+    # stdout, so both have to be read or the listing comes back empty while
+    # every individual lookup works.
+    names = []
+    for line in (done.stdout + "\n" + done.stderr).splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "attribute.name":
+            name = value.strip()
+            if name and name not in names:
+                names.append(name)
+    return sorted(names)
+
+
+def secret_value(host: str, name: str) -> str:
+    try:
+        done = subprocess.run(
+            ["secret-tool", "lookup", "application", SECRET_APP,
+             "host", host, "name", name],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HostError(str(exc))
+    if done.returncode != 0:
+        raise HostError((done.stderr or "no such secret").strip().splitlines()[-1])
+    return done.stdout
+
+
+def secret_store(host: str, name: str, value: str) -> None:
+    """Hand a value to the keyring. It arrives on stdin rather than in the
+    command line, which anything on the machine can read."""
+    if not name.strip():
+        raise HostError("A name is required.")
+    try:
+        done = subprocess.run(
+            ["secret-tool", "store", "--label", f"helm: {host}/{name}",
+             "application", SECRET_APP, "host", host, "name", name],
+            input=value, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HostError(str(exc))
+    if done.returncode != 0:
+        raise HostError((done.stderr or "could not store").strip().splitlines()[-1])
+
+
+def secret_clear(host: str, name: str) -> None:
+    try:
+        done = subprocess.run(
+            ["secret-tool", "clear", "application", SECRET_APP,
+             "host", host, "name", name],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HostError(str(exc))
+    if done.returncode != 0:
+        raise HostError((done.stderr or "could not remove").strip().splitlines()[-1])
+
+
 def kill_session(host: str, session: str) -> None:
     """End a tmux session and everything running in it.
 
