@@ -129,6 +129,8 @@ who wrote it.
 | `ctrl-shift-w` | Close the view; the session behind it keeps running |
 | `F11` | Fullscreen, and back |
 | `ctrl-q` | Quit |
+| `ctrl-shift-c` / `ctrl-shift-v` | Copy / paste. Plain `ctrl-c` stays the interrupt |
+| `ctrl-click` a URL | Open it. Right-click for copy, paste and the link under the pointer |
 
 There is no title bar. GTK hides it fullscreen, so nothing that matters could live there anyway --
 the actions are under the wordmark and the `x` is in the footer, both on screen whatever the window

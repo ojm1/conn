@@ -40,6 +40,18 @@ SOURCE = "https://github.com/ojm1/helm-tui"
 # U+2388 is, literally, the helm symbol -- a ship's wheel, which is where the
 # name comes from. The wordmark under it is box-drawing rather than an image
 # so it takes the theme's accent colour like everything else.
+# PCRE2 compile flags, which VTE takes as-is. NO_UTF_CHECK because the
+# terminal's own contents are the input and it is already UTF-8.
+PCRE2_MULTILINE = 0x00000400
+PCRE2_UTF = 0x00080000
+PCRE2_NO_UTF_CHECK = 0x40000000
+
+# Bare URLs, which no terminal marks up for you. Trailing punctuation is left
+# out deliberately: a link at the end of a sentence should not swallow the
+# full stop, and brackets around it are not part of it either.
+URL_PATTERN = (r"(?:https?://|ftp://|file://|mailto:)"
+               r"[^\s<>\"\'`{}|\\^\[\]]*[^\s<>\"\'`{}|\\^\[\].,;:!?)]")
+
 WORDMARK = """╻ ╻┏━╸╻  ┏┳┓
 ┣━┫┣╸ ┃  ┃┃┃
 ╹ ╹┗━╸┗━╸╹ ╹"""
@@ -104,6 +116,25 @@ class Session(Gtk.Box):
         self.term.set_mouse_autohide(True)
         self.term.connect("child-exited", self._exited)
 
+        # OSC 8 hyperlinks, the ones a program marks up itself.
+        self.term.set_allow_hyperlink(True)
+        # And the ones nobody marked up, which is most of them -- the login
+        # URL an agent prints is just text until something matches it.
+        self.link_tag = -1
+        try:
+            regex = Vte.Regex.new_for_match(
+                URL_PATTERN, -1,
+                PCRE2_UTF | PCRE2_NO_UTF_CHECK | PCRE2_MULTILINE)
+            self.link_tag = self.term.match_add_regex(regex, 0)
+            self.term.match_set_cursor_name(self.link_tag, "pointer")
+        except Exception:
+            pass    # no link detection is a worse terminal, not a broken one
+
+        clicks = Gtk.GestureClick()
+        clicks.set_button(0)          # any button; the handler sorts them out
+        clicks.connect("pressed", self._clicked)
+        self.term.add_controller(clicks)
+
         scroller = Gtk.ScrolledWindow()
         scroller.set_child(self.term)
         scroller.set_hexpand(True)
@@ -126,6 +157,88 @@ class Session(Gtk.Box):
             None,      # cancellable
             self._spawned,
         )
+
+    def link_at(self, x: float, y: float) -> str:
+        """The URL under the pointer, marked up or not."""
+        try:
+            hyperlink = self.term.check_hyperlink_at(x, y)
+        except Exception:
+            hyperlink = None
+        if hyperlink:
+            return hyperlink
+        try:
+            match, _tag = self.term.check_match_at(x, y)
+        except Exception:
+            return ""
+        return match or ""
+
+    def _clicked(self, gesture, _presses, x, y):
+        """ctrl-click opens a link; the plain click stays the terminal's.
+
+        A modifier rather than a bare click because the program inside may be
+        tracking the mouse itself, and taking its clicks away would be worse
+        than not having links.
+        """
+        button = gesture.get_current_button()
+        state = gesture.get_current_event_state()
+        control = bool(state & Gdk.ModifierType.CONTROL_MASK)
+
+        if button == 2:                       # middle: the X primary paste
+            self.term.paste_primary()
+            return
+        if button == 3:
+            self.menu(x, y)
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            return
+        if button == 1 and control:
+            uri = self.link_at(x, y)
+            if uri:
+                Gtk.UriLauncher(uri=uri).launch(None, None, None, None)
+                gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+
+    def menu(self, x: float, y: float) -> None:
+        """Copy, paste, and whatever link is under the pointer."""
+        uri = self.link_at(x, y)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
+                      margin_top=6, margin_bottom=6,
+                      margin_start=6, margin_end=6)
+        popover = Gtk.Popover()
+        popover.set_parent(self.term)
+        point = Gdk.Rectangle()
+        point.x, point.y = int(x), int(y)
+        point.width = point.height = 1
+        popover.set_pointing_to(point)
+        popover.connect("closed", lambda pop: pop.unparent())
+
+        def item(label, handler, enabled=True):
+            button = Gtk.Button(label=label)
+            button.set_has_frame(False)
+            button.get_child().set_xalign(0)
+            button.set_sensitive(enabled)
+            button.connect("clicked",
+                           lambda _b: (popover.popdown(), handler()))
+            box.append(button)
+
+        if uri:
+            item(f"Open {uri[:44]}",
+                 lambda: Gtk.UriLauncher(uri=uri).launch(None, None, None, None))
+            item("Copy link", lambda: self.to_clipboard(uri))
+        item("Copy", self.copy, self.term.get_has_selection())
+        item("Paste", self.paste)
+        item("Select all", self.term.select_all)
+        popover.set_child(box)
+        popover.popup()
+
+    @staticmethod
+    def to_clipboard(text: str) -> None:
+        Gdk.Display.get_default().get_clipboard().set(text)
+
+    def copy(self) -> None:
+        if self.term.get_has_selection():
+            self.term.copy_clipboard_format(Vte.Format.TEXT)
+
+    def paste(self) -> None:
+        self.term.paste_clipboard()
 
     def _spawned(self, _term, pid, error, _data=None):
         """A spawn that fails leaves an empty black rectangle and no clue.
@@ -648,6 +761,11 @@ class Helm(Gtk.ApplicationWindow):
         # The title bar's close button goes with the title bar in fullscreen.
         bind("<ctrl>q", lambda _w, _a: (self.close(), True)[1])
         bind("<ctrl><shift>k", lambda _w, _a: self.kill_selected())
+        # VTE binds no keys of its own: without these, a terminal has no copy
+        # and no paste at all. Plain ctrl-c stays the interrupt it has to be.
+        bind("<ctrl><shift>c", lambda _w, _a: self.on_terminal("copy"))
+        bind("<ctrl><shift>v", lambda _w, _a: self.on_terminal("paste"))
+        bind("<ctrl><shift>a", lambda _w, _a: self.on_terminal("select_all"))
         bind("F11", lambda _w, _a: self.toggle_fullscreen())
 
     # -- switching ---------------------------------------------------------
@@ -678,6 +796,16 @@ class Helm(Gtk.ApplicationWindow):
         except ValueError:
             index = 0
         return self.show(sessions[(index + step) % len(sessions)])
+
+    def on_terminal(self, action: str) -> bool:
+        """Run one of the terminal's own actions on whichever is showing."""
+        current = self.stack.get_visible_child()
+        if isinstance(current, Session):
+            if action == "select_all":
+                current.term.select_all()
+            else:
+                getattr(current, action)()
+        return True
 
     def kill_selected(self) -> bool:
         """Kill whatever the list is pointing at. Not bound to Delete: this
