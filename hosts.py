@@ -241,7 +241,7 @@ echo "###PANES";  tmux list-panes -a -F "#{session_name}|#{pane_current_command}
 echo "###CAPTURE"
 tmux list-sessions -F "#{session_name}" 2>/dev/null | while read -r s; do
   echo "@@@SESSION:$s"
-  tmux capture-pane -p -t "$s" 2>/dev/null | tail -__CAPLINES__
+  tmux capture-pane -p -e -t "$s" 2>/dev/null | tail -__CAPLINES__
 done
 echo "###END"
 """
@@ -254,7 +254,9 @@ def _split_captures(text: str) -> dict[str, str]:
 
     Unlike every other section these must survive verbatim: blank lines and
     leading spaces are part of what makes a terminal screen readable, and the
-    state classifier reads them.
+    state classifier reads them. capture-pane runs with -e so they keep their
+    colour too: dim is the only thing telling a suggestion sitting in the
+    input box apart from something you typed and left there.
     """
     start = text.find("###CAPTURE")
     if start < 0:
@@ -362,7 +364,8 @@ def probe(host: str) -> dict:
         name = bits[0]
         if name == mine:
             continue
-        screen = screens.get(name, "")
+        raw = screens.get(name, "")
+        screen = agent_state.strip_ansi(raw)
         commands = [pane["cmd"] for pane in panes.get(name, [])]
         row["sessions"].append({
             "name": name, "windows": bits[1],
@@ -370,7 +373,7 @@ def probe(host: str) -> dict:
             "activity": int(bits[3]) if len(bits) > 3 and bits[3].isdigit() else 0,
             "panes": panes.get(name, []),
             "screen": screen,
-            "agent": agent_state.classify(screen, commands),
+            "agent": agent_state.classify(screen, commands, raw),
         })
     return row
 
@@ -542,7 +545,7 @@ last=""
 while :; do
   out=$(tmux list-sessions -F "#{session_name}" 2>/dev/null | while read -r s; do
           echo "@@@SESSION:$s"
-          tmux capture-pane -p -t "$s" 2>/dev/null | tail -__CAPLINES__
+          tmux capture-pane -p -e -t "$s" 2>/dev/null | tail -__CAPLINES__
           echo "@@@PANES:$s"
           tmux list-panes -t "$s" -F "#{pane_current_command}" 2>/dev/null
         done)
@@ -601,9 +604,14 @@ def parse_frame(lines: list[str], host: str = "") -> dict[str, dict]:
     # Only ours, and only here: a remote box may well have a session with the
     # same name, and it is a different session on a different machine.
     mine = own_session() if is_local(host) else ""
-    return {name: {"screen": "\n".join(data["screen"]).strip("\n"),
-                   "commands": data["commands"]}
-            for name, data in sessions.items() if name != mine}
+    frames = {}
+    for name, data in sessions.items():
+        if name == mine:
+            continue
+        raw = "\n".join(data["screen"]).strip("\n")
+        frames[name] = {"screen": agent_state.strip_ansi(raw), "raw": raw,
+                        "commands": data["commands"]}
+    return frames
 
 
 def send_text(host: str, session: str, text: str, submit: bool = True) -> None:

@@ -856,7 +856,7 @@ class Helm(Gtk.ApplicationWindow):
                     continue
                 session["screen"] = data["screen"]
                 session["agent"] = agent_state.classify(
-                    data["screen"], data["commands"])
+                    data["screen"], data["commands"], data.get("raw", ""))
                 dirty = True
         if dirty:
             self.render()

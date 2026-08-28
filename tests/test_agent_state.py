@@ -57,6 +57,15 @@ CASES = [
 ]
 
 
+# Captured off real screens. The words are interchangeable; only the dim SGR
+# says which one you are looking at, so these carry their escapes and go in
+# raw as well as stripped.
+RAW_CASES = [
+    ("claude suggestion is not a draft", "claude_suggestion.txt", A.READY),
+    ("claude typed text is a draft",     "claude_typed_draft.txt", A.DRAFT),
+]
+
+
 def screen_for(value: str) -> str:
     """A case carries either a fixture filename or a screen written inline."""
     if value.endswith(".txt"):
@@ -72,6 +81,16 @@ def main() -> int:
         failures += not ok
         print(f"{'ok  ' if ok else 'FAIL'} {name:22} {result['state']:9} "
               f"{result['detail'][:40]!r}")
+        if not ok:
+            print(f"     expected {expected}")
+
+    for name, fixture, expected in RAW_CASES:
+        raw = (FIXTURES / fixture).read_text()
+        result = A.classify(A.strip_ansi(raw), ["claude"], raw)
+        ok = result["state"] == expected
+        failures += not ok
+        print(f"{'ok  ' if ok else 'FAIL'} {name:34} {result['state']:9} "
+              f"{result['detail'][:34]!r}")
         if not ok:
             print(f"     expected {expected}")
 
@@ -101,7 +120,8 @@ def main() -> int:
         failures += not passed
         print(f"{'ok  ' if passed else 'FAIL'} {label}")
 
-    print(f"\n{len(CASES) + len(checks) - failures}/{len(CASES) + len(checks)} passed")
+    total = len(CASES) + len(RAW_CASES) + len(checks)
+    print(f"\n{total - failures}/{total} passed")
     return 1 if failures else 0
 
 

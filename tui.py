@@ -591,7 +591,7 @@ class SSHPanel(App):
                 continue
             session["screen"] = data["screen"]
             session["agent"] = agent_state.classify(
-                data["screen"], data["commands"])
+                data["screen"], data["commands"], data.get("raw", ""))
 
         # Rendering happens on a timer instead. A busy host emits several
         # frames a second, and rebuilding the table on each one starves

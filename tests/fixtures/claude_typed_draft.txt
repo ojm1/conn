@@ -1,0 +1,7 @@
+  Dry-mapped it against the real mapper, and all of it comes through:
+
+[39m                                                    new task? /clear to save 650.8k tokens
+[39m──────────────────────────────────────── ultracode ─
+[39m❯ this one I actually typed
+[39m──────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

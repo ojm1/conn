@@ -55,7 +55,8 @@ class Agent:
     BLOCKED: tuple[re.Pattern, ...] = ()
     TOKENS: re.Pattern | None = None
 
-    def input_box(self, screen: str) -> str | None:
+    def input_box(self, screen: str,
+                  ghosts: set[int] | None = None) -> str | None:
         """Contents of the input box: None if it cannot be found, "" if empty,
         otherwise the unsent text."""
         raise NotImplementedError
@@ -148,7 +149,8 @@ class ClaudeCode(Agent):
         label = [char for char in stripped if char not in "─━- "]
         return len(label) <= self.RULE_LABEL_MAX
 
-    def input_box(self, screen: str) -> str | None:
+    def input_box(self, screen: str,
+                  ghosts: set[int] | None = None) -> str | None:
         """This has to be exact. Submitted messages stay on screen in the
         transcript behind the very same "❯" that marks the input line, so
         matching "❯" anywhere reports every finished chat as having unsent
@@ -168,6 +170,15 @@ class ClaudeCode(Agent):
             # The capture can end mid-box when the screen was trimmed, leaving
             # the opening rule as the last one seen.
             segment = lines[rules[-1] + 1:]
+
+        # Whatever the box holds, if it was drawn dim then Claude suggested
+        # it and you did not leave it there. An empty box is idle.
+        if ghosts:
+            first = (rules[-2] + 1
+                     if len(rules) >= 2 and rules[-1] - rules[-2] <= 4
+                     else rules[-1] + 1)
+            segment = [line for offset, line in enumerate(segment)
+                       if first + offset not in ghosts]
 
         segment = [line for line in segment if not self.FOOTER.search(line)]
         if not segment:
@@ -258,7 +269,8 @@ class OpenCode(Agent):
     LAST_ACTION = re.compile(
         r"▣[^\n]*·\s*((?:\d+h\s*)?(?:\d+m\s*)?[\d.]+s)\s*$", re.M)
 
-    def input_box(self, screen: str) -> str | None:
+    def input_box(self, screen: str,
+                  ghosts: set[int] | None = None) -> str | None:
         lines = screen.splitlines()
         rules = [index for index, line in enumerate(lines)
                  if self.RULE.match(line)]
@@ -319,7 +331,57 @@ def detect(commands: list[str]) -> Agent | None:
     return None
 
 
-def classify(screen: str, commands: list[str]) -> dict:
+SGR = re.compile(r"\x1b\[([0-9;]*)m")
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def strip_ansi(text: str) -> str:
+    return ANSI.sub("", text)
+
+
+def ghost_lines(raw: str) -> set[int]:
+    """Line numbers whose text is mostly dim.
+
+    Claude Code writes its suggested next prompt into the input box in dim
+    grey -- SGR 2 -- exactly where a half-typed message would sit. Stripped of
+    colour the two are the same characters, so every suggestion read as an
+    unsent draft and the panel said you were the holdup when you were not.
+
+    Dimness is the only thing separating them, so it has to survive the
+    capture. Judged per line and by weight, because the "\u276f" that opens the box
+    is drawn at normal brightness even when what follows is a ghost.
+    """
+    ghosts = set()
+    for index, line in enumerate(raw.splitlines()):
+        dim = False
+        faint = solid = 0
+
+        position = 0
+        for match in SGR.finditer(line):
+            for char in line[position:match.start()]:
+                if not char.isspace() and char != "\xa0":
+                    if dim:
+                        faint += 1
+                    else:
+                        solid += 1
+            position = match.end()
+            for code in (match.group(1) or "0").split(";"):
+                if code == "2":
+                    dim = True
+                elif code in ("", "0", "22"):
+                    dim = False
+        for char in line[position:]:
+            if not char.isspace() and char != "\xa0":
+                if dim:
+                    faint += 1
+                else:
+                    solid += 1
+        if faint and faint > solid:
+            ghosts.add(index)
+    return ghosts
+
+
+def classify(screen: str, commands: list[str], raw: str = "") -> dict:
     """Return {state, label, detail, tokens, agent} for one session's screen."""
     result = {"state": UNKNOWN, "label": LABELS[UNKNOWN], "detail": "",
               "tokens": "", "agent": ""}
@@ -360,7 +422,7 @@ def classify(screen: str, commands: list[str]) -> dict:
             result["detail"] = agent.blocked_detail(screen)
             return result
 
-    box = agent.input_box(screen)
+    box = agent.input_box(screen, ghost_lines(raw) if raw else set())
 
     # An unsent draft still wins: that one needs a human, background work does
     # not. But anything running in the background beats "idle".
