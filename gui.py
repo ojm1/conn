@@ -182,12 +182,12 @@ class Helm(Gtk.ApplicationWindow):
     # -- layout ------------------------------------------------------------
 
     def _build(self) -> None:
-        # Nothing but the title lives up here. GTK hides the titlebar when the
-        # window is fullscreened, so anything kept in it is unreachable in
-        # exactly the mode you would want the most room for.
-        header = Gtk.HeaderBar()
-        header.set_title_widget(Gtk.Label(label=""))
-        self.set_titlebar(header)
+        # No title bar at all. GTK hides it when the window is fullscreened,
+        # so nothing that matters can live there -- and once the actions moved
+        # into the sidebar it was an empty strip taking a row of pixels for
+        # the name of a window whose name is drawn six lines below it.
+        # Closing is the x in the footer, ctrl-q, or the compositor.
+        self.set_decorated(False)
 
         self.list = Gtk.ListBox()
         self.list.set_selection_mode(Gtk.SelectionMode.SINGLE)
@@ -781,6 +781,14 @@ class Helm(Gtk.ApplicationWindow):
         self.unlock.set_visible(False)
         self.unlock.connect("clicked", lambda _b: self.do_unlock())
         bar.append(self.unlock)
+
+        # The one thing genuinely lost with the title bar. Down here it is
+        # still there fullscreen, which is where it went missing before.
+        shut = Gtk.Button(icon_name="window-close-symbolic")
+        shut.add_css_class("action")
+        shut.set_tooltip_text("Close helm (ctrl-q). Sessions keep running.")
+        shut.connect("clicked", lambda _b: self.close())
+        bar.append(shut)
         return bar
 
     def do_unlock(self) -> None:

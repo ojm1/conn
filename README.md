@@ -129,6 +129,10 @@ who wrote it.
 | `ctrl-shift-w` | Close the view; the session behind it keeps running |
 | `F11` | Fullscreen, and back |
 | `ctrl-q` | Quit |
+
+There is no title bar. GTK hides it fullscreen, so nothing that matters could live there anyway --
+the actions are under the wordmark and the `x` is in the footer, both on screen whatever the window
+is doing.
 | right-click a session | Open it, or kill it (asked first -- there is no undo) |
 | `+` | New session on the selected host, local or remote |
 | server icon | Add a server to `~/.ssh/config` |
