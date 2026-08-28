@@ -133,19 +133,39 @@ literal newline inside the agent's input box instead of submitting.
 
 ## Install
 
-Requires Python 3.11+ locally, and `tmux` on the hosts you connect to.
+Requires Python 3.11+, GTK4 and VTE locally, and `tmux` on the hosts you connect to.
 
 ```bash
+sudo pacman -S gtk4 vte4 python-gobject          # the window
 mkdir -p ~/.local/share/helm/app
 cp *.py ~/.local/share/helm/app/
 cp bin/* ~/.local/bin/
-python3 -m venv ~/.local/share/helm/venv
+python3 -m venv --system-site-packages ~/.local/share/helm/venv
 ~/.local/share/helm/venv/bin/pip install -r requirements.txt
 helm --check      # probe every host once and print what it found
 ```
 
+`--system-site-packages` is not optional: PyGObject is a system package, and a venv sealed off from
+it cannot see GTK at all.
+
+`helm --tui` is the terminal panel this grew out of. It is what you want over ssh, where there is
+no window to open, and it needs no GTK.
+
 Colours follow the [Omarchy](https://omarchy.org) desktop theme when present, and fall back to a
 built-in palette otherwise. `HELM_THEME=light|dark` forces it.
+
+## One window
+
+The list is a sidebar and the session opens beside it, in a real terminal widget -- VTE, the one
+GNOME Terminal and Ptyxis are built on. Opening a chat costs you nothing you were already looking
+at.
+
+It used to throw a new window at the compositor per session, which is not a layout: on Hyprland
+those landed on whichever workspace happened to be active, at whatever size dwindle felt like,
+while the panel sat on another workspace entirely.
+
+tmux is still doing the real work on the far side -- it is what makes a session survive the window
+closing. You just stop seeing it as a window of its own.
 
 ## Notes for tiling WMs
 

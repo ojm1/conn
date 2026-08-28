@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
 USAGE = """helm -- your servers, and what is running on them
 
   helm                   open the panel
+  helm --tui             the old terminal panel, for use over ssh
   helm --list            print host names (for scripts)
   helm --check           probe every host once and print the result
   helm --help            this message
@@ -40,6 +42,11 @@ def main(argv: list[str]) -> int:
             print(USAGE)
             return 0
 
+        if arg == "--tui":
+            from tui import SSHPanel
+            SSHPanel().run()
+            return 0
+
         if arg == "--list":
             for host in hosts.list_hosts():
                 print(host)
@@ -61,9 +68,18 @@ def main(argv: list[str]) -> int:
         print(f"unknown option: {arg}\n\n{USAGE}", file=sys.stderr)
         return 2
 
-    from tui import SSHPanel
-    SSHPanel().run()
-    return 0
+    # The window is the panel now. --tui is the way back while the GUI is
+    # still growing into everything the terminal one does, and over ssh, where
+    # there is no window to open.
+    try:
+        from gui import run
+    except (ImportError, ValueError) as exc:
+        print(f"the window needs GTK4 and VTE: {exc}\n"
+              "  sudo pacman -S vte4        (python-gobject and gtk4 you have)\n"
+              "  helm --tui                 the terminal panel, meanwhile",
+              file=sys.stderr)
+        return 1
+    return run()
 
 
 if __name__ == "__main__":
