@@ -149,6 +149,7 @@ class Helm(Gtk.ApplicationWindow):
 
         self._build()
         self._style()
+        self._shortcuts()
 
         self.load_hosts()
         GLib.timeout_add_seconds(REFRESH_SECONDS, self.sweep_tick)
@@ -188,7 +189,10 @@ class Helm(Gtk.ApplicationWindow):
 
         self.placeholder = Gtk.Label(
             label="Pick a session on the left.\n"
-                  "It opens here -- this window keeps the list.")
+                  "It opens here -- this window keeps the list.\n\n"
+                  "alt-1..9  the session in that slot\n"
+                  "ctrl-tab  next open session\n"
+                  "F12       back to the list")
         self.placeholder.add_css_class("placeholder")
         self.placeholder.set_justify(Gtk.Justification.CENTER)
         self.stack.add_named(self.placeholder, "placeholder")
@@ -199,6 +203,92 @@ class Helm(Gtk.ApplicationWindow):
         split.set_position(300)
         split.set_resize_start_child(False)
         self.set_child(split)
+
+    def _shortcuts(self) -> None:
+        """Keys for switching, taken before the terminal sees them.
+
+        CAPTURE phase is the whole point: a focused VTE swallows almost
+        everything, and alt-1 in particular it would send on as ESC-1. The
+        window has to claim these on the way down or they never arrive.
+
+        That means F12 no longer reaches tmux, where ssh-connect binds it to
+        detach. In a window with a session list down the side there is nothing
+        to detach back to -- so it does the same job one level up, and puts you
+        back on the list.
+        """
+        keys = Gtk.ShortcutController()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        self.add_controller(keys)
+
+        def bind(accel: str, handler):
+            keys.add_shortcut(Gtk.Shortcut(
+                trigger=Gtk.ShortcutTrigger.parse_string(accel),
+                action=Gtk.CallbackAction.new(handler)))
+
+        for n in range(1, 10):
+            bind(f"<alt>{n}",
+                 lambda _w, _a, index=n - 1: self.show_nth(index))
+        bind("<ctrl>Tab", lambda _w, _a: self.cycle(1))
+        bind("<ctrl><shift>Tab", lambda _w, _a: self.cycle(-1))
+        bind("<ctrl>Page_Down", lambda _w, _a: self.cycle(1))
+        bind("<ctrl>Page_Up", lambda _w, _a: self.cycle(-1))
+        bind("F12", lambda _w, _a: self.focus_list())
+        bind("<ctrl><shift>w", lambda _w, _a: self.close_visible())
+
+    # -- switching ---------------------------------------------------------
+
+    def opened(self) -> list[Session]:
+        """Open sessions in the order they were opened -- which is the order
+        alt-1..9 counts in, and the order the list marks them."""
+        return list(self.open.values())
+
+    def show(self, session: Session) -> bool:
+        self.stack.set_visible_child(session)
+        session.term.grab_focus()
+        self.select_key((session.host, session.name))
+        return True
+
+    def show_nth(self, index: int) -> bool:
+        sessions = self.opened()
+        if index < len(sessions):
+            return self.show(sessions[index])
+        return True     # claimed either way, or alt-4 types a 4 in the shell
+
+    def cycle(self, step: int) -> bool:
+        sessions = self.opened()
+        if not sessions:
+            return True
+        current = self.stack.get_visible_child()
+        try:
+            index = sessions.index(current)
+        except ValueError:
+            index = 0
+        return self.show(sessions[(index + step) % len(sessions)])
+
+    def focus_list(self) -> bool:
+        """Back to the list, without reaching for the mouse. Arrows move,
+        enter opens."""
+        self.list.grab_focus()
+        row = self.list.get_selected_row()
+        if row is not None:
+            row.grab_focus()
+        return True
+
+    def close_visible(self) -> bool:
+        """Close the view. The tmux session on the other side keeps running --
+        that is what it is for -- so this loses nothing but the tab."""
+        current = self.stack.get_visible_child()
+        if isinstance(current, Session):
+            self.close_session(current)
+        return True
+
+    def select_key(self, key: tuple[str, str]) -> None:
+        index = 0
+        while (row := self.list.get_row_at_index(index)) is not None:
+            if getattr(row, "key", None) == key:
+                self.list.select_row(row)
+                return
+            index += 1
 
     def _style(self) -> None:
         """Take the desktop's colours rather than GTK's.
@@ -221,6 +311,8 @@ class Helm(Gtk.ApplicationWindow):
         .name {{ font-family: monospace; }}
         .detail {{ color: {p.muted}; font-size: 0.85em; }}
         .placeholder {{ color: {p.muted}; }}
+        .tab {{ color: {p.accent}; font-size: 0.8em;
+                font-family: monospace; }}
         """
         provider = Gtk.CssProvider()
         provider.load_from_data(css.encode())
@@ -319,6 +411,15 @@ class Helm(Gtk.ApplicationWindow):
         name = Gtk.Label(label=session["name"], xalign=0)
         name.add_css_class("name")
         box.append(name)
+
+        # An open session says which alt-key reaches it, so the shortcut does
+        # not have to be counted out or remembered.
+        key = (host, session["name"])
+        if key in self.open:
+            slot = list(self.open).index(key) + 1
+            tab = Gtk.Label(label=f"alt-{slot}" if slot < 10 else "open")
+            tab.add_css_class("tab")
+            box.append(tab)
 
         detail = session["agent"]["label"]
         if session["agent"]["detail"]:
