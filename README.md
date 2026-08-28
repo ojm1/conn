@@ -127,6 +127,8 @@ who wrote it.
 | `ctrl-tab` / `ctrl-shift-tab` | Next / previous open session |
 | `F12` | Back to the list -- arrows move, enter opens |
 | `ctrl-shift-w` | Close the view; the session behind it keeps running |
+| `F11` | Fullscreen, and back |
+| `ctrl-q` | Quit |
 | right-click a session | Open it, or kill it (asked first -- there is no undo) |
 | `+` | New session on the selected host, local or remote |
 | server icon | Add a server to `~/.ssh/config` |

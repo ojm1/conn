@@ -182,24 +182,11 @@ class Helm(Gtk.ApplicationWindow):
     # -- layout ------------------------------------------------------------
 
     def _build(self) -> None:
+        # Nothing but the title lives up here. GTK hides the titlebar when the
+        # window is fullscreened, so anything kept in it is unreachable in
+        # exactly the mode you would want the most room for.
         header = Gtk.HeaderBar()
         header.set_title_widget(Gtk.Label(label=""))
-
-        new = Gtk.Button(icon_name="list-add-symbolic")
-        new.set_tooltip_text("New session on the selected host")
-        new.connect("clicked", lambda _b: self.prompt_new_session())
-        header.pack_start(new)
-
-        add = Gtk.Button(icon_name="network-server-symbolic")
-        add.set_tooltip_text("Add a server to ~/.ssh/config")
-        add.connect("clicked", lambda _b: self.prompt_add_host())
-        header.pack_start(add)
-
-        refresh = Gtk.Button(icon_name="view-refresh-symbolic")
-        refresh.set_tooltip_text("Refresh every host now")
-        refresh.connect("clicked", lambda _b: self.load_hosts())
-        header.pack_end(refresh)
-
         self.set_titlebar(header)
 
         self.list = Gtk.ListBox()
@@ -657,6 +644,9 @@ class Helm(Gtk.ApplicationWindow):
         bind("<ctrl>Page_Up", lambda _w, _a: self.cycle(-1))
         bind("F12", lambda _w, _a: self.focus_list())
         bind("<ctrl><shift>w", lambda _w, _a: self.close_visible())
+        # The title bar's close button goes with the title bar in fullscreen.
+        bind("<ctrl>q", lambda _w, _a: (self.close(), True)[1])
+        bind("F11", lambda _w, _a: self.toggle_fullscreen())
 
     # -- switching ---------------------------------------------------------
 
@@ -686,6 +676,13 @@ class Helm(Gtk.ApplicationWindow):
         except ValueError:
             index = 0
         return self.show(sessions[(index + step) % len(sessions)])
+
+    def toggle_fullscreen(self) -> bool:
+        if self.is_fullscreen():
+            self.unfullscreen()
+        else:
+            self.fullscreen()
+        return True
 
     def focus_list(self) -> bool:
         """Back to the list, without reaching for the mouse. Arrows move,
@@ -737,6 +734,22 @@ class Helm(Gtk.ApplicationWindow):
         self.subtitle = Gtk.Label(label="", xalign=0)
         self.subtitle.add_css_class("tagline")
         box.append(self.subtitle)
+
+        actions = Gtk.Box(spacing=4, margin_top=8)
+        for icon, tip, handler in (
+            ("list-add-symbolic", "New session on the selected host",
+             lambda: self.prompt_new_session()),
+            ("network-server-symbolic", "Add a server to ~/.ssh/config",
+             lambda: self.prompt_add_host()),
+            ("view-refresh-symbolic", "Refresh every host now",
+             lambda: self.load_hosts()),
+        ):
+            button = Gtk.Button(icon_name=icon)
+            button.add_css_class("action")
+            button.set_tooltip_text(tip)
+            button.connect("clicked", lambda _b, h=handler: h())
+            actions.append(button)
+        box.append(actions)
         return box
 
     def _footer(self) -> Gtk.Widget:
@@ -818,9 +831,16 @@ class Helm(Gtk.ApplicationWindow):
                  color: {p.accent}; min-width: 26px; }}
         .link {{ color: {p.accent}; font-size: 0.85em; padding: 0; }}
         .locked {{ color: {p.red}; font-size: 0.8em; padding: 2px 8px; }}
+        .action {{ min-width: 26px; min-height: 26px; padding: 2px; }}
         .secret {{ font-family: monospace; }}
         .sidebar row {{ padding: 2px 10px; }}
         .sidebar row:selected {{ background: {p.accent}; color: {p.background}; }}
+        /* Child labels carry their own colour, and one of them is the accent
+           itself -- which on the accent-coloured selection is invisible. */
+        .sidebar row:selected .slot,
+        .sidebar row:selected .slot-open,
+        .sidebar row:selected .name,
+        .sidebar row:selected .detail {{ color: {p.background}; }}
         .host {{ color: {p.muted}; font-weight: bold;
                  padding-top: 10px; letter-spacing: 0.06em; }}
         .mark {{ font-family: monospace; font-weight: bold; }}
