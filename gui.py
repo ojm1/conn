@@ -145,6 +145,11 @@ class Helm(Gtk.ApplicationWindow):
         # screen beats numbering what happens to be open: the number is there
         # before you open it, which is when you need it.
         self.slots: list[tuple[str, str]] = []
+        # What the sidebar is currently made of, and the labels inside each
+        # session row. Kept so a screen changing can repaint the words without
+        # rebuilding the widgets under the pointer -- see render().
+        self.shape: list = []
+        self.widgets: dict[tuple[str, str], dict] = {}
         self.watched: set[str] = set()
         self.watchers: dict[str, object] = {}
         self.inflight: set[str] = set()
@@ -299,8 +304,17 @@ class Helm(Gtk.ApplicationWindow):
                       margin_top=6, margin_bottom=6,
                       margin_start=6, margin_end=6)
         popover = Gtk.Popover()
-        popover.set_parent(row)
-        popover.set_pointing_to(Gdk.Rectangle())
+        # Parented to the list, not to the row: rows are replaced whenever the
+        # session list itself changes, and a popover whose parent is destroyed
+        # goes with it -- which looked like the menu refusing to be clicked.
+        popover.set_parent(self.list)
+        point = Gdk.Rectangle()
+        allocation = row.get_allocation()
+        point.x = allocation.x + int(x)
+        point.y = allocation.y + int(y)
+        point.width = point.height = 1
+        popover.set_pointing_to(point)
+        popover.connect("closed", lambda pop: pop.unparent())
 
         def item(label, handler, destructive=False):
             button = Gtk.Button(label=label)
@@ -560,11 +574,34 @@ class Helm(Gtk.ApplicationWindow):
         self.sweep()
 
     def render(self) -> None:
-        """Rebuild the sidebar, putting the selection back where it was.
+        """Bring the sidebar up to date, rebuilding it only if it has to.
 
-        Rebuilding wholesale is honest about what changed -- sessions come and
-        go on their own -- and at this size it is cheaper than diffing.
+        A screen changing is the common case, and it changes words, not
+        structure. Rebuilding the rows for that destroys whatever the pointer
+        or the keyboard was on -- a right-click menu is parented to a row, so
+        it vanished a frame after opening -- so the shape is compared first
+        and only a real change to it costs new widgets.
         """
+        shape = []
+        waiting = 0
+        slots = []
+        for host in self.order:
+            shape.append(("host", host, self.rows[host]["state"]))
+            for session in self.rows[host]["sessions"]:
+                if session["agent"]["state"] in (agent_state.NEEDS_YOU,
+                                                 agent_state.DRAFT):
+                    waiting += 1
+                slots.append((host, session["name"]))
+                shape.append(("session", host, session["name"]))
+
+        self.slots = slots
+        self.subtitle.set_text(
+            f"{waiting} waiting on you" if waiting else "nothing waiting")
+
+        if shape == self.shape:
+            self.repaint()
+            return
+
         chosen = None
         row = self.list.get_selected_row()
         if row is not None:
@@ -572,30 +609,43 @@ class Helm(Gtk.ApplicationWindow):
 
         while (child := self.list.get_first_child()) is not None:
             self.list.remove(child)
+        self.widgets.clear()
 
-        waiting = 0
-        self.slots = []
+        slot = 0
         for host in self.order:
-            data = self.rows[host]
-            self.list.append(self._host_row(host, data))
-            for session in data["sessions"]:
-                state = session["agent"]["state"]
-                if state in (agent_state.NEEDS_YOU, agent_state.DRAFT):
-                    waiting += 1
-                self.slots.append((host, session["name"]))
-                self.list.append(
-                    self._session_row(host, session, len(self.slots)))
-
-        self.subtitle.set_text(
-            f"{waiting} waiting on you" if waiting else "nothing waiting")
+            self.list.append(self._host_row(host, self.rows[host]))
+            for session in self.rows[host]["sessions"]:
+                slot += 1
+                self.list.append(self._session_row(host, session, slot))
+        self.shape = shape
 
         if chosen is not None:
-            index = 0
-            while (row := self.list.get_row_at_index(index)) is not None:
-                if getattr(row, "key", None) == chosen:
-                    self.list.select_row(row)
-                    break
-                index += 1
+            self.select_key(chosen)
+
+    def repaint(self) -> None:
+        """Same rows, new words: marks, states and which ones are open."""
+        for host in self.order:
+            for session in self.rows[host]["sessions"]:
+                parts = self.widgets.get((host, session["name"]))
+                if parts is None:
+                    continue
+                state = session["agent"]["state"]
+                parts["mark"].set_label(MARKS.get(state, "?"))
+                parts["mark"].set_attributes(self._colour_attrs(
+                    mark_colour(self.palette, state)))
+                parts["detail"].set_label(self._detail(session))
+                open_now = (host, session["name"]) in self.open
+                if open_now:
+                    parts["number"].add_css_class("slot-open")
+                else:
+                    parts["number"].remove_css_class("slot-open")
+
+    @staticmethod
+    def _detail(session: dict) -> str:
+        detail = session["agent"]["label"]
+        if session["agent"]["detail"]:
+            detail = f"{detail}  {session['agent']['detail']}"
+        return detail
 
     def _host_row(self, host: str, data: dict) -> Gtk.ListBoxRow:
         row = Gtk.ListBoxRow()
@@ -646,14 +696,14 @@ class Helm(Gtk.ApplicationWindow):
         name.add_css_class("name")
         box.append(name)
 
-        detail = session["agent"]["label"]
-        if session["agent"]["detail"]:
-            detail = f"{detail}  {session['agent']['detail']}"
-        tail = Gtk.Label(label=detail, xalign=1)
+        tail = Gtk.Label(label=self._detail(session), xalign=1)
         tail.add_css_class("detail")
         tail.set_hexpand(True)
         tail.set_ellipsize(Pango.EllipsizeMode.END)
         box.append(tail)
+
+        self.widgets[(host, session["name"])] = {
+            "number": number, "mark": mark, "detail": tail}
 
         menu = Gtk.GestureClick()
         menu.set_button(3)
