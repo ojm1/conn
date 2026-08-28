@@ -1031,17 +1031,24 @@ class Helm(Gtk.ApplicationWindow):
         self.open_session(*key)
 
     def open_session(self, host: str, name: str) -> None:
+        """Open one, or come back to it if it is already open.
+
+        Both ends go through show(), so the list always agrees with the
+        terminal about which session you are looking at -- opening one by its
+        number used to move the terminal and leave the highlight behind.
+        """
         key = (host, name)
         if key in self.open:
-            self.stack.set_visible_child(self.open[key])
-            self.open[key].term.grab_focus()
+            self.show(self.open[key])
             return
 
         session = Session(host, name, self.palette, self.close_session)
         self.open[key] = session
         self.stack.add_named(session, f"{host}/{name}")
-        self.stack.set_visible_child(session)
-        session.term.grab_focus()
+        self.show(session)
+        # The number beside it goes accent once it is open, and that is drawn
+        # by the list rather than by the stack.
+        self.repaint()
 
     def close_session(self, session: Session) -> None:
         """A session whose command ended takes its terminal with it.
@@ -1051,8 +1058,16 @@ class Helm(Gtk.ApplicationWindow):
         """
         self.open.pop((session.host, session.name), None)
         self.stack.remove(session)
-        if not self.open:
+        self.repaint()
+        if self.open:
+            # Which one to fall back to is ours to choose: left alone, the
+            # stack picks whatever child it likes -- usually the placeholder,
+            # while two sessions are still open behind it.
+            self.show(list(self.open.values())[-1])
+        else:
             self.stack.set_visible_child(self.placeholder)
+            # The highlight stays where it was, as the cursor for the arrow
+            # keys. Nothing is showing, and nothing pretends to be.
 
     # -- probing -----------------------------------------------------------
 
