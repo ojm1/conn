@@ -660,6 +660,43 @@ def send_key(host: str, session: str, key: str) -> None:
 # The agent, and the secrets beside it
 # ---------------------------------------------------------------------------
 
+# Where a desktop keeps its ssh agent, in the order worth trying.
+AGENT_SOCKETS = ("gcr/ssh",            # gnome-keyring, via gcr
+                 "ssh-agent.socket",   # systemd's own user agent
+                 "keyring/ssh")        # older gnome-keyring
+
+
+def ensure_agent() -> str:
+    """Find the agent when nothing in the environment points at one.
+
+    SSH_AUTH_SOCK is usually exported by a shell profile, so a panel started
+    from a launcher rather than a terminal has never heard of it. That is not
+    obvious from the outside: ssh keeps working for a while on the
+    multiplexed connections ControlPersist is holding open, and only once
+    those age out does every host start refusing at once.
+
+    Setting it here means every ssh, ssh-add and secret-tool spawned below
+    inherits it, whichever way helm was started.
+    """
+    current = os.environ.get("SSH_AUTH_SOCK", "")
+    try:
+        if current and Path(current).is_socket():
+            return current
+    except OSError:
+        pass
+
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+    for name in AGENT_SOCKETS:
+        candidate = runtime / name
+        try:
+            if candidate.is_socket():
+                os.environ["SSH_AUTH_SOCK"] = str(candidate)
+                return str(candidate)
+        except OSError:
+            continue
+    return ""
+
+
 def agent_keys() -> int | None:
     """How many identities the ssh agent is holding, or None if there is no
     agent to ask.

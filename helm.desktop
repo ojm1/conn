@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Helm
+GenericName=Server panel
+Comment=The servers you keep coding agents on, and whether they are working or waiting on you
+Exec=helm
+Icon=utilities-terminal
+Terminal=false
+Categories=Network;RemoteAccess;
+StartupWMClass=org.omarchy.helm
+Keywords=ssh;tmux;servers;agents;claude;

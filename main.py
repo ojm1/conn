@@ -35,6 +35,10 @@ HELM_NO_LOCAL=1 drops the 'local' row for this machine.
 def main(argv: list[str]) -> int:
     import hosts
 
+    # Before anything spawns an ssh: a helm started from a launcher inherits
+    # no SSH_AUTH_SOCK, and would look like it had no agent at all.
+    hosts.ensure_agent()
+
     if len(argv) > 1:
         arg = argv[1]
 

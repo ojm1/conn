@@ -190,6 +190,11 @@ helm --check      # probe every host once and print what it found
 `--system-site-packages` is not optional: PyGObject is a system package, and a venv sealed off from
 it cannot see GTK at all.
 
+`cp helm.desktop ~/.local/share/applications/` if you want it in a launcher. It is a window now, so
+starting it through a TUI wrapper (`omarchy-launch-tui helm`, or a terminal binding) leaves an empty
+terminal sitting beside the real one -- the terminal is hosting a process that no longer draws
+anything in it.
+
 `helm --tui` is the terminal panel this grew out of. It is what you want over ssh, where there is
 no window to open, and it needs no GTK.
 
