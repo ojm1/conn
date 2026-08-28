@@ -158,6 +158,15 @@ column is blank rather than promising a key that does not exist.
 | `n` `r` `f` `u` `a` `k` `e` | New shell, refresh, mount, unmount, add host, install key, edit config |
 | `?` | Full key guide, in the app |
 
+## It tells you
+
+The panel is honest about who is waiting on you, but only to someone looking at it -- and the thing
+worth knowing is exactly that a chat has been sitting there while you did something else. So it
+says so: a desktop notification on the edge into **needs you** or **unsent draft**, once, and not
+again until the session has been something else in between. Clicking it opens that session.
+
+States that were already true when helm started are on screen already, and are not announced.
+
 ## The one password
 
 helm never sees it. Your ssh key is unlocked once -- by the desktop keyring at login -- and every

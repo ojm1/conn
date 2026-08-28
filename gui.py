@@ -27,7 +27,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("Vte", "3.91")
 
-from gi.repository import Gdk, GLib, Gtk, Pango, Vte  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk, Pango, Vte  # noqa: E402
 
 import agent_state  # noqa: E402
 import hosts  # noqa: E402
@@ -270,6 +270,10 @@ class Helm(Gtk.ApplicationWindow):
         # What the sidebar is currently made of, and the labels inside each
         # session row. Kept so a screen changing can repaint the words without
         # rebuilding the widgets under the pointer -- see render().
+        # What each session was last seen doing. A notification is worth
+        # sending when this changes to one of the states that means you, and
+        # never for a state that was already true when helm started.
+        self.was: dict[tuple[str, str], str] = {}
         self.shape: list = []
         self.widgets: dict[tuple[str, str], dict] = {}
         self.watched: set[str] = set()
@@ -1063,6 +1067,8 @@ class Helm(Gtk.ApplicationWindow):
         self.footnote.set_text(
             f"{live}/{len(self.order)} hosts  ·  {len(slots)} sessions")
 
+        self.announce()
+
         if shape == self.shape:
             self.repaint()
             return
@@ -1086,6 +1092,50 @@ class Helm(Gtk.ApplicationWindow):
 
         if chosen is not None:
             self.select_key(chosen)
+
+    def announce(self) -> None:
+        """Say, once, when a session starts waiting on you.
+
+        The panel is honest about who is blocked, but only to someone looking
+        at it -- and the thing worth knowing is precisely that a chat has been
+        sitting there while you did something else. So it says so out loud on
+        the edge into needs-you, and not again until it has been something
+        else in between.
+
+        The first sweep only records: everything already waiting when helm
+        opens is on screen, and five notifications for it would be noise.
+        """
+        first = not self.was
+        for host in self.order:
+            for session in self.rows[host]["sessions"]:
+                key = (host, session["name"])
+                state = session["agent"]["state"]
+                before = self.was.get(key)
+                self.was[key] = state
+                if first or before is None or before == state:
+                    continue
+                if state not in (agent_state.NEEDS_YOU, agent_state.DRAFT):
+                    continue
+                self.notify(host, session)
+
+        for gone in [k for k in self.was
+                     if k not in {(h, s["name"]) for h in self.order
+                                  for s in self.rows[h]["sessions"]}]:
+            del self.was[gone]
+
+    def notify(self, host: str, session: dict) -> None:
+        note = Gio.Notification.new(f"{host}/{session['name']}")
+        detail = session["agent"]["detail"]
+        note.set_body(f"{session['agent']['label']}"
+                      + (f" -- {detail}" if detail else ""))
+        note.set_priority(Gio.NotificationPriority.NORMAL)
+        # Clicking it opens the session it is about, which is the only thing
+        # anyone wants from a notification like this.
+        note.set_default_action_and_target(
+            "app.open-session",
+            GLib.Variant("s", f"{host}\t{session['name']}"))
+        self.get_application().send_notification(
+            f"helm-{host}-{session['name']}", note)
 
     def repaint(self) -> None:
         """Same rows, new words: marks, states and which ones are open."""
@@ -1376,6 +1426,20 @@ class Helm(Gtk.ApplicationWindow):
 class HelmApp(Gtk.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID)
+
+        # Clicking a notification lands here, whether or not the window was
+        # the thing you were looking at.
+        action = Gio.SimpleAction.new("open-session", GLib.VariantType("s"))
+        action.connect("activate", self.open_from_notification)
+        self.add_action(action)
+
+    def open_from_notification(self, _action, target):
+        window = self.props.active_window
+        if window is None:
+            return
+        host, _, name = target.get_string().partition("\t")
+        window.present()
+        window.open_session(host, name)
 
     def do_activate(self):
         window = self.props.active_window or Helm(self)
