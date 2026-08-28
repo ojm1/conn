@@ -141,6 +141,10 @@ class Helm(Gtk.ApplicationWindow):
         self.rows: dict[str, dict] = {}
         self.order: list[str] = []
         self.open: dict[tuple[str, str], Session] = {}
+        # What alt-1..9 reaches, rebuilt with the list. Numbering what is on
+        # screen beats numbering what happens to be open: the number is there
+        # before you open it, which is when you need it.
+        self.slots: list[tuple[str, str]] = []
         self.watched: set[str] = set()
         self.watchers: dict[str, object] = {}
         self.inflight: set[str] = set()
@@ -168,10 +172,25 @@ class Helm(Gtk.ApplicationWindow):
         self.subtitle.add_css_class("subtitle")
         header.set_title_widget(self.subtitle)
 
+        new = Gtk.Button(icon_name="list-add-symbolic")
+        new.set_tooltip_text("New session on the selected host")
+        new.connect("clicked", lambda _b: self.prompt_new_session())
+        header.pack_start(new)
+
+        add = Gtk.Button(icon_name="network-server-symbolic")
+        add.set_tooltip_text("Add a server to ~/.ssh/config")
+        add.connect("clicked", lambda _b: self.prompt_add_host())
+        header.pack_start(add)
+
         refresh = Gtk.Button(icon_name="view-refresh-symbolic")
         refresh.set_tooltip_text("Refresh every host now")
         refresh.connect("clicked", lambda _b: self.load_hosts())
         header.pack_end(refresh)
+
+        guide = Gtk.MenuButton(icon_name="help-about-symbolic")
+        guide.set_tooltip_text("What the marks mean, and the keys")
+        guide.set_popover(self._guide())
+        header.pack_end(guide)
         self.set_titlebar(header)
 
         self.list = Gtk.ListBox()
@@ -190,7 +209,7 @@ class Helm(Gtk.ApplicationWindow):
         self.placeholder = Gtk.Label(
             label="Pick a session on the left.\n"
                   "It opens here -- this window keeps the list.\n\n"
-                  "alt-1..9  the session in that slot\n"
+                  "alt-1..9  the numbered session on the left\n"
                   "ctrl-tab  next open session\n"
                   "F12       back to the list")
         self.placeholder.add_css_class("placeholder")
@@ -203,6 +222,206 @@ class Helm(Gtk.ApplicationWindow):
         split.set_position(300)
         split.set_resize_start_child(False)
         self.set_child(split)
+
+    def _guide(self) -> Gtk.Popover:
+        """What a mark means, spelled out.
+
+        A single red ! is only obvious once someone has told you; until then
+        it is a punctuation mark on a list.
+        """
+        marks = [
+            ("!", agent_state.NEEDS_YOU, "needs you",
+             "blocked on a prompt only you can answer"),
+            ("!", agent_state.DRAFT, "unsent draft",
+             "text left in the box, never submitted -- looks done, is not"),
+            ("*", agent_state.WORKING, "working",
+             "busy, or running background agents -- leave it"),
+            ("o", agent_state.READY, "idle", "waiting at an empty prompt"),
+            (".", agent_state.SHELL, "shell", "not an agent, just a shell"),
+            ("?", agent_state.UNKNOWN, "unknown",
+             "not recognised -- never assume this one is idle"),
+        ]
+        grid = Gtk.Grid(row_spacing=4, column_spacing=10, margin_top=12,
+                        margin_bottom=12, margin_start=12, margin_end=12)
+        for row, (mark, state, name, means) in enumerate(marks):
+            glyph = Gtk.Label(label=mark, xalign=0)
+            glyph.add_css_class("mark")
+            glyph.set_attributes(self._colour_attrs(
+                mark_colour(self.palette, state)))
+            grid.attach(glyph, 0, row, 1, 1)
+            grid.attach(Gtk.Label(label=name, xalign=0), 1, row, 1, 1)
+            hint = Gtk.Label(label=means, xalign=0)
+            hint.add_css_class("detail")
+            grid.attach(hint, 2, row, 1, 1)
+
+        keys = [("alt-1..9", "open the session with that number"),
+                ("ctrl-tab", "next open session"),
+                ("F12", "back to the list"),
+                ("ctrl-shift-w", "close the view, leave the session running"),
+                ("right-click", "kill a session, or open it")]
+        for offset, (key, means) in enumerate(keys):
+            row = len(marks) + offset + 1
+            label = Gtk.Label(label=key, xalign=0)
+            label.add_css_class("tab")
+            grid.attach(label, 0, row, 2, 1)
+            hint = Gtk.Label(label=means, xalign=0)
+            hint.add_css_class("detail")
+            grid.attach(hint, 2, row, 1, 1)
+
+        popover = Gtk.Popover()
+        popover.set_child(grid)
+        return popover
+
+    # -- acting on a session -----------------------------------------------
+
+    def selected_key(self) -> tuple[str, str] | None:
+        row = self.list.get_selected_row()
+        return getattr(row, "key", None) if row is not None else None
+
+    def selected_host(self) -> str:
+        """The host of whatever is selected, or the first one listed.
+
+        A session row implies its host, so "new session" does not need a
+        separate host selection to mean something.
+        """
+        key = self.selected_key()
+        if key:
+            return key[0]
+        return self.order[0] if self.order else hosts.LOCAL
+
+    def row_menu(self, row, x: float, y: float) -> None:
+        key = getattr(row, "key", None)
+        if key is None:
+            return
+        host, name = key
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
+                      margin_top=6, margin_bottom=6,
+                      margin_start=6, margin_end=6)
+        popover = Gtk.Popover()
+        popover.set_parent(row)
+        popover.set_pointing_to(Gdk.Rectangle())
+
+        def item(label, handler, destructive=False):
+            button = Gtk.Button(label=label)
+            button.set_has_frame(False)
+            button.get_child().set_xalign(0)
+            if destructive:
+                button.add_css_class("destructive")
+            button.connect("clicked", lambda _b: (popover.popdown(), handler()))
+            box.append(button)
+
+        item("Open", lambda: self.open_session(host, name))
+        item(f"Kill {host}/{name}...", lambda: self.confirm_kill(host, name),
+             destructive=True)
+        popover.set_child(box)
+        popover.popup()
+
+    def confirm_kill(self, host: str, name: str) -> None:
+        """Ask first. A killed session takes whatever it was doing with it,
+        and there is no scrollback afterwards to find out what that was."""
+        dialog = Gtk.AlertDialog()
+        dialog.set_message(f"Kill {host}/{name}?")
+        dialog.set_detail("Everything running in the session ends. This cannot "
+                          "be undone, and the screen is not kept.")
+        dialog.set_buttons(["Cancel", "Kill session"])
+        dialog.set_cancel_button(0)
+        dialog.set_default_button(0)
+
+        def answered(source, result):
+            try:
+                choice = source.choose_finish(result)
+            except GLib.Error:
+                return
+            if choice == 1:
+                threading.Thread(target=self._kill, args=(host, name),
+                                 daemon=True).start()
+
+        dialog.choose(self, None, answered)
+
+    def _kill(self, host: str, name: str) -> None:
+        try:
+            hosts.kill_session(host, name)
+        except (hosts.HostError, OSError) as exc:
+            GLib.idle_add(self.complain, f"{host}/{name}", str(exc))
+            return
+        # The view is of a session that no longer exists; the terminal will
+        # notice on its own when the client exits, but closing it now is what
+        # you asked for.
+        session = self.open.get((host, name))
+        if session is not None:
+            GLib.idle_add(self.close_session, session)
+        GLib.idle_add(self.sweep)
+
+    def complain(self, what: str, message: str) -> bool:
+        dialog = Gtk.AlertDialog()
+        dialog.set_message(what)
+        dialog.set_detail(message)
+        dialog.show(self)
+        return GLib.SOURCE_REMOVE
+
+    # -- new session, new host ---------------------------------------------
+
+    def prompt_new_session(self) -> None:
+        host = self.selected_host()
+        self.ask(f"New session on {host}", [("Name", "shell")],
+                 lambda values: self.open_session(host, values["Name"]))
+
+    def prompt_add_host(self) -> None:
+        def add(values):
+            try:
+                backup = hosts.add_host(values["Name"], values["Hostname"],
+                                        values["User"], values["Port"] or "22")
+            except (hosts.HostError, OSError) as exc:
+                self.complain("Could not add host", str(exc))
+                return
+            self.load_hosts()
+            self.complain("Added to ~/.ssh/config",
+                          f"The old file is kept at {backup.name}.")
+
+        self.ask("Add a server", [("Name", ""), ("Hostname", ""),
+                                  ("User", ""), ("Port", "22")], add)
+
+    def ask(self, title: str, fields: list[tuple[str, str]], done) -> None:
+        """A small modal form. GTK has no one-line prompt, and four of these
+        are cheaper than four hand-built dialogs."""
+        window = Gtk.Window(title=title, transient_for=self, modal=True)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8,
+                      margin_top=14, margin_bottom=14,
+                      margin_start=14, margin_end=14)
+        entries: dict[str, Gtk.Entry] = {}
+        for label, initial in fields:
+            line = Gtk.Box(spacing=8)
+            name = Gtk.Label(label=label, xalign=0)
+            name.set_size_request(90, -1)
+            entry = Gtk.Entry()
+            entry.set_text(initial)
+            entry.set_hexpand(True)
+            entries[label] = entry
+            line.append(name)
+            line.append(entry)
+            box.append(line)
+
+        def submit(*_args):
+            values = {k: e.get_text().strip() for k, e in entries.items()}
+            window.close()
+            if any(values.values()):
+                done(values)
+
+        buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
+        cancel = Gtk.Button(label="Cancel")
+        cancel.connect("clicked", lambda _b: window.close())
+        confirm = Gtk.Button(label=title.split()[0])
+        confirm.add_css_class("suggested-action")
+        confirm.connect("clicked", submit)
+        buttons.append(cancel)
+        buttons.append(confirm)
+        box.append(buttons)
+
+        for entry in entries.values():
+            entry.connect("activate", submit)   # enter submits from any field
+        window.set_child(box)
+        window.present()
 
     def _shortcuts(self) -> None:
         """Keys for switching, taken before the terminal sees them.
@@ -249,9 +468,8 @@ class Helm(Gtk.ApplicationWindow):
         return True
 
     def show_nth(self, index: int) -> bool:
-        sessions = self.opened()
-        if index < len(sessions):
-            return self.show(sessions[index])
+        if index < len(self.slots):
+            self.open_session(*self.slots[index])
         return True     # claimed either way, or alt-4 types a 4 in the shell
 
     def cycle(self, step: int) -> bool:
@@ -313,6 +531,9 @@ class Helm(Gtk.ApplicationWindow):
         .placeholder {{ color: {p.muted}; }}
         .tab {{ color: {p.accent}; font-size: 0.8em;
                 font-family: monospace; }}
+        .slot {{ color: {p.muted}; font-family: monospace; font-size: 0.85em; }}
+        .slot-open {{ color: {p.accent}; font-weight: bold; }}
+        .destructive {{ color: {p.red}; }}
         """
         provider = Gtk.CssProvider()
         provider.load_from_data(css.encode())
@@ -353,6 +574,7 @@ class Helm(Gtk.ApplicationWindow):
             self.list.remove(child)
 
         waiting = 0
+        self.slots = []
         for host in self.order:
             data = self.rows[host]
             self.list.append(self._host_row(host, data))
@@ -360,7 +582,9 @@ class Helm(Gtk.ApplicationWindow):
                 state = session["agent"]["state"]
                 if state in (agent_state.NEEDS_YOU, agent_state.DRAFT):
                     waiting += 1
-                self.list.append(self._session_row(host, session))
+                self.slots.append((host, session["name"]))
+                self.list.append(
+                    self._session_row(host, session, len(self.slots)))
 
         self.subtitle.set_text(
             f"{waiting} waiting on you" if waiting else "nothing waiting")
@@ -395,12 +619,22 @@ class Helm(Gtk.ApplicationWindow):
         row.set_child(box)
         return row
 
-    def _session_row(self, host: str, session: dict) -> Gtk.ListBoxRow:
+    def _session_row(self, host: str, session: dict,
+                     slot: int) -> Gtk.ListBoxRow:
         state = session["agent"]["state"]
         row = Gtk.ListBoxRow()
         row.key = (host, session["name"])
 
         box = Gtk.Box(spacing=8)
+        # The number is the alt-key. Past nine there is no key to name, so the
+        # column stays blank rather than promising one.
+        number = Gtk.Label(label=str(slot) if slot < 10 else "", xalign=1)
+        number.add_css_class("slot")
+        if (host, session["name"]) in self.open:
+            number.add_css_class("slot-open")
+        number.set_size_request(14, -1)
+        box.append(number)
+
         mark = Gtk.Label(label=MARKS.get(state, "?"))
         mark.add_css_class("mark")
         mark.set_size_request(12, -1)
@@ -412,15 +646,6 @@ class Helm(Gtk.ApplicationWindow):
         name.add_css_class("name")
         box.append(name)
 
-        # An open session says which alt-key reaches it, so the shortcut does
-        # not have to be counted out or remembered.
-        key = (host, session["name"])
-        if key in self.open:
-            slot = list(self.open).index(key) + 1
-            tab = Gtk.Label(label=f"alt-{slot}" if slot < 10 else "open")
-            tab.add_css_class("tab")
-            box.append(tab)
-
         detail = session["agent"]["label"]
         if session["agent"]["detail"]:
             detail = f"{detail}  {session['agent']['detail']}"
@@ -429,6 +654,12 @@ class Helm(Gtk.ApplicationWindow):
         tail.set_hexpand(True)
         tail.set_ellipsize(Pango.EllipsizeMode.END)
         box.append(tail)
+
+        menu = Gtk.GestureClick()
+        menu.set_button(3)
+        menu.connect("pressed",
+                     lambda _g, _n, x, y, r=row: self.row_menu(r, x, y))
+        row.add_controller(menu)
 
         row.set_child(box)
         return row

@@ -106,7 +106,23 @@ server and still take the terminal as before.
 For the same reason the session helm is running in is left out of its own list: attaching to it is
 the one attach that cannot go anywhere.
 
-## Keys
+## In the window
+
+| | Does |
+|---|---|
+| `alt-1`..`alt-9` | Open the session with that number in the list |
+| `ctrl-tab` / `ctrl-shift-tab` | Next / previous open session |
+| `F12` | Back to the list -- arrows move, enter opens |
+| `ctrl-shift-w` | Close the view; the session behind it keeps running |
+| right-click a session | Open it, or kill it (asked first -- there is no undo) |
+| `+` | New session on the selected host, local or remote |
+| server icon | Add a server to `~/.ssh/config` |
+| `i` | What the marks mean, and the keys |
+
+Every session carries the number that opens it, so the shortcut is never counted out. Past nine the
+column is blank rather than promising a key that does not exist.
+
+## Keys (`--tui`)
 
 | Key | Does |
 |---|---|

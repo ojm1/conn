@@ -648,6 +648,20 @@ def send_key(host: str, session: str, key: str) -> None:
         raise HostError(message.splitlines()[-1] if message else "send failed")
 
 
+def kill_session(host: str, session: str) -> None:
+    """End a tmux session and everything running in it.
+
+    There is no undo and no scrollback afterwards: whatever the agent was
+    part-way through is gone. Callers ask first.
+    """
+    done = subprocess.run(
+        run_argv(host, f"tmux kill-session -t {shlex.quote(session)}"),
+        stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
+    if done.returncode != 0:
+        message = (done.stderr or b"").decode(errors="replace").strip()
+        raise HostError(message.splitlines()[-1] if message else "kill failed")
+
+
 def copy_key(host: str) -> None:
     """ssh-copy-id needs a password typed, so it gets a real terminal window
     rather than being run headless behind the panel."""
