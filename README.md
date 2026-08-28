@@ -97,6 +97,15 @@ and they show up here, survive the window closing, and can be replied to from th
 `HELM_NO_LOCAL=1` hides the row. A `Host local` already in `~/.ssh/config` wins: an alias you can
 really ssh to beats one the panel invented.
 
+**If helm is itself running inside tmux**, a local session opens in its own window instead of taking
+this one. It has to: tmux gives one terminal to one client, so attaching in place detaches the
+session helm is running in -- helm disappears, and F12 then closes the window rather than bringing
+it back, because the client it detaches is the outer one. Remote sessions are a different tmux
+server and still take the terminal as before.
+
+For the same reason the session helm is running in is left out of its own list: attaching to it is
+the one attach that cannot go anywhere.
+
 ## Keys
 
 | Key | Does |

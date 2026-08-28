@@ -526,7 +526,7 @@ class SSHPanel(App):
                     if not line:
                         break
                     if line.startswith("###FRAME"):
-                        frame = hosts.parse_frame(buffer)
+                        frame = hosts.parse_frame(buffer, host)
                         buffer = []
                         # A queue, not call_from_thread: that call blocks the
                         # streaming thread until the event loop runs it, and
@@ -1023,6 +1023,18 @@ class SSHPanel(App):
         emulation in between, and detaching (ctrl-b d) drops you straight back
         into the panel.
         """
+        if hosts.is_local(host) and os.environ.get("TMUX"):
+            # The panel is itself inside tmux, and a local session cannot share
+            # this terminal with it: tmux gives one terminal to one client, so
+            # attaching here detaches the session the panel is running in. The
+            # panel vanishes, and F12 then closes the window rather than
+            # bringing it back. Its own window costs nothing and leaves this
+            # one alone. Remote sessions are a different tmux server, so they
+            # are free to take the terminal as before.
+            self.status(f"{host}/{session} in its own window "
+                        "-- helm is inside tmux, so it kept this one")
+            self.spawn_windows([(host, session)])
+            return
         with self.suspend():
             subprocess.run(hosts.connect_argv(host, session))
         self.start_probe(host)

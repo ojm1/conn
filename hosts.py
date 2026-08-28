@@ -45,6 +45,30 @@ def is_local(host: str) -> bool:
     return host == LOCAL
 
 
+_OWN_SESSION: str | None = None
+
+
+def own_session() -> str:
+    """The local tmux session the panel is running inside, or "".
+
+    Normally "" -- helm gets a window of its own. Started from inside tmux it
+    is a real session, and listing it would offer to attach to the session you
+    are already in: the one place an attach cannot go. So it is left out.
+    """
+    global _OWN_SESSION
+    if _OWN_SESSION is None:
+        _OWN_SESSION = ""
+        if os.environ.get("TMUX"):
+            try:
+                out = subprocess.run(["tmux", "display-message", "-p", "#S"],
+                                     stdin=subprocess.DEVNULL,
+                                     capture_output=True, text=True, timeout=5)
+                _OWN_SESSION = out.stdout.strip()
+            except (OSError, subprocess.SubprocessError):
+                pass
+    return _OWN_SESSION
+
+
 def run_argv(host: str, script: str, opts: list[str] | None = None,
              stdin: bool = False) -> list[str]:
     """argv that runs `script` on `host`.
@@ -330,11 +354,14 @@ def probe(host: str) -> dict:
             panes.setdefault(bits[0], []).append({"cmd": bits[1], "path": bits[2]})
 
     screens = _split_captures(done.stdout)
+    mine = own_session() if is_local(host) else ""
     for line in parts["TMUX"]:
         bits = line.split("|")
         if len(bits) < 3:
             continue
         name = bits[0]
+        if name == mine:
+            continue
         screen = screens.get(name, "")
         commands = [pane["cmd"] for pane in panes.get(name, [])]
         row["sessions"].append({
@@ -546,8 +573,14 @@ def watch_screens(host: str, interval: float = 1.0) -> subprocess.Popen:
         text=True, bufsize=1)
 
 
-def parse_frame(lines: list[str]) -> dict[str, dict]:
-    """One frame -> {session: {"screen": str, "commands": [str]}}."""
+def parse_frame(lines: list[str], host: str = "") -> dict[str, dict]:
+    """One frame -> {session: {"screen": str, "commands": [str]}}.
+
+    Our own session is dropped here too, not just in probe(). The panel treats
+    "the stream and the probe disagree about which sessions exist" as a session
+    having appeared, so filtering one and not the other would re-probe on every
+    single frame.
+    """
     sessions: dict[str, dict] = {}
     current = None
     mode = None
@@ -565,9 +598,12 @@ def parse_frame(lines: list[str]) -> dict[str, dict]:
         elif current and mode == "commands" and line.strip():
             sessions[current]["commands"].append(line.strip())
 
+    # Only ours, and only here: a remote box may well have a session with the
+    # same name, and it is a different session on a different machine.
+    mine = own_session() if is_local(host) else ""
     return {name: {"screen": "\n".join(data["screen"]).strip("\n"),
                    "commands": data["commands"]}
-            for name, data in sessions.items()}
+            for name, data in sessions.items() if name != mine}
 
 
 def send_text(host: str, session: str, text: str, submit: bool = True) -> None:
