@@ -133,7 +133,9 @@ who wrote it.
 There is no title bar. GTK hides it fullscreen, so nothing that matters could live there anyway --
 the actions are under the wordmark and the `x` is in the footer, both on screen whatever the window
 is doing.
-| right-click a session | Open it, or kill it (asked first -- there is no undo) |
+| hover a session | A bin appears: kill it, asked first -- there is no undo |
+| `ctrl-shift-k` | Kill the selected session |
+| right-click | The same, as a menu -- on a host too, for new session and its passwords |
 | `+` | New session on the selected host, local or remote |
 | server icon | Add a server to `~/.ssh/config` |
 | `i` | What the marks mean, and the keys |

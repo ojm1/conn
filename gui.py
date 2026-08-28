@@ -261,7 +261,8 @@ class Helm(Gtk.ApplicationWindow):
                 ("ctrl-tab", "next open session"),
                 ("F12", "back to the list"),
                 ("ctrl-shift-w", "close the view, leave the session running"),
-                ("right-click", "kill a session, or open it")]
+                ("ctrl-shift-k", "kill the selected session, for good"),
+                ("F11 / ctrl-q", "fullscreen / quit")]
         for offset, (key, means) in enumerate(keys):
             row = len(marks) + offset + 1
             label = Gtk.Label(label=key, xalign=0)
@@ -646,6 +647,7 @@ class Helm(Gtk.ApplicationWindow):
         bind("<ctrl><shift>w", lambda _w, _a: self.close_visible())
         # The title bar's close button goes with the title bar in fullscreen.
         bind("<ctrl>q", lambda _w, _a: (self.close(), True)[1])
+        bind("<ctrl><shift>k", lambda _w, _a: self.kill_selected())
         bind("F11", lambda _w, _a: self.toggle_fullscreen())
 
     # -- switching ---------------------------------------------------------
@@ -676,6 +678,15 @@ class Helm(Gtk.ApplicationWindow):
         except ValueError:
             index = 0
         return self.show(sessions[(index + step) % len(sessions)])
+
+    def kill_selected(self) -> bool:
+        """Kill whatever the list is pointing at. Not bound to Delete: this
+        runs in the capture phase, so it would be taken from a terminal you
+        were typing in."""
+        key = self.selected_key()
+        if key:
+            self.confirm_kill(*key)
+        return True
 
     def toggle_fullscreen(self) -> bool:
         if self.is_fullscreen():
@@ -860,6 +871,11 @@ class Helm(Gtk.ApplicationWindow):
         .slot {{ color: {p.muted}; font-family: monospace; font-size: 0.85em; }}
         .slot-open {{ color: {p.accent}; font-weight: bold; }}
         .destructive {{ color: {p.red}; }}
+        .kill {{ color: {p.red}; opacity: 0; min-width: 22px; min-height: 22px;
+                 padding: 0; margin: 0; }}
+        .sidebar row:hover .kill {{ opacity: 0.75; }}
+        .sidebar row:hover .kill:hover {{ opacity: 1; }}
+        .sidebar row:selected .kill {{ color: {p.background}; opacity: 0.7; }}
         """
         provider = Gtk.CssProvider()
         provider.load_from_data(css.encode())
@@ -1028,6 +1044,18 @@ class Helm(Gtk.ApplicationWindow):
         tail.set_hexpand(True)
         tail.set_ellipsize(Pango.EllipsizeMode.END)
         box.append(tail)
+
+        # Right-click is not a feature anyone finds. The same kill, on the
+        # row, shown when the pointer is over it so eight of them are not
+        # sitting there inviting a misclick.
+        kill = Gtk.Button(icon_name="user-trash-symbolic")
+        kill.add_css_class("kill")
+        kill.set_has_frame(False)
+        kill.set_tooltip_text(
+            f"Kill {host}/{session['name']} -- everything running in it ends")
+        kill.connect("clicked",
+                     lambda _b, h=host, n=session["name"]: self.confirm_kill(h, n))
+        box.append(kill)
 
         self.widgets[(host, session["name"])] = {
             "number": number, "mark": mark, "detail": tail}
