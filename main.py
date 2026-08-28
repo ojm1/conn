@@ -26,6 +26,7 @@ Chat states:  working | needs you | unsent draft | idle | shell
 
 The main pane is a live view of the chat's screen, updated about once a second.
 HELM_NO_WATCH=1 disables streaming and falls back to 45s polling.
+HELM_NO_LOCAL=1 drops the 'local' row for this machine.
 """
 
 

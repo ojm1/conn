@@ -22,6 +22,11 @@ import agent_state
 SSH_CONFIG = Path.home() / ".ssh" / "config"
 MNT_ROOT = Path.home() / "mnt"
 
+# The machine the panel itself runs on, listed as a host under this reserved
+# name. It is not "ssh to yourself": run_argv hands the same scripts straight
+# to bash, so the local rows cost no daemon, no key and no round trip.
+LOCAL = "local"
+
 CONNECT_TIMEOUT = 6      # seconds to get a TCP + auth handshake
 CAPTURE_LINES = 200     # lines of each remote screen to bring back;
                         # the panel renders as many as it can fit
@@ -30,6 +35,38 @@ PROBE_TIMEOUT = 15       # hard ceiling on the whole probe
 
 class HostError(RuntimeError):
     """Something the user needs to read, not a traceback."""
+
+
+# ---------------------------------------------------------------------------
+# Transport: where a script runs
+# ---------------------------------------------------------------------------
+
+def is_local(host: str) -> bool:
+    return host == LOCAL
+
+
+def run_argv(host: str, script: str, opts: list[str] | None = None,
+             stdin: bool = False) -> list[str]:
+    """argv that runs `script` on `host`.
+
+    Every probe, watch and send below is POSIX shell that never mentions how it
+    got there, so this is the only place that knows the difference: locally the
+    script goes to bash directly, remotely it goes to ssh. One copy of each
+    script, two transports.
+
+    `stdin` keeps the channel open for callers that feed the script input; ssh
+    otherwise reads stdin by default and steals the panel's keystrokes, which
+    is why -n is on everywhere else.
+    """
+    if is_local(host):
+        return ["bash", "-c", script]
+
+    argv = ["ssh"]
+    if not stdin:
+        argv.append("-n")
+    argv += ["-o", "BatchMode=yes", "-o", f"ConnectTimeout={CONNECT_TIMEOUT}"]
+    argv += list(opts or [])
+    return argv + [host, script]
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +82,7 @@ def list_hosts() -> list[str]:
     try:
         text = SSH_CONFIG.read_text()
     except OSError:
-        return []
+        text = ""
 
     names: list[str] = []
     for line in text.splitlines():
@@ -54,6 +91,13 @@ def list_hosts() -> list[str]:
             for name in parts[1:]:
                 if not re.search(r"[*?!]", name) and name not in names:
                     names.append(name)
+
+    # This machine leads the list: it is the one host that is always up, and
+    # the sessions on it are the ones you are most likely to be mid-thought in.
+    # A config that already defines "local" keeps it -- an alias the user can
+    # actually ssh to beats one the panel invented. HELM_NO_LOCAL=1 hides it.
+    if LOCAL not in names and os.environ.get("HELM_NO_LOCAL") != "1":
+        names.insert(0, LOCAL)
     return names
 
 
@@ -64,6 +108,10 @@ def resolve(host: str) -> dict:
     panel shows the connection that will actually be made.
     """
     info = {"user": "", "hostname": "", "port": "", "identityfile": ""}
+    if is_local(host):
+        # Nothing to resolve, and no connection to describe. Saying so beats
+        # printing a loopback address that no ssh will ever be made to.
+        return info | {"hostname": "this machine", "port": "22"}
     try:
         out = subprocess.run(["ssh", "-G", host], stdin=subprocess.DEVNULL,
                              capture_output=True, text=True, timeout=10).stdout
@@ -235,10 +283,9 @@ def probe(host: str) -> dict:
 
     try:
         done = subprocess.run(
-            ["ssh", "-n", "-o", "BatchMode=yes",
-             "-o", f"ConnectTimeout={CONNECT_TIMEOUT}",
-             "-o", "StrictHostKeyChecking=accept-new",
-             host, REMOTE_PROBE.replace("__CAPLINES__", str(CAPTURE_LINES))],
+            run_argv(host,
+                     REMOTE_PROBE.replace("__CAPLINES__", str(CAPTURE_LINES)),
+                     opts=["-o", "StrictHostKeyChecking=accept-new"]),
             stdin=subprocess.DEVNULL,
             capture_output=True, text=True, timeout=PROBE_TIMEOUT)
     except subprocess.TimeoutExpired:
@@ -255,7 +302,10 @@ def probe(host: str) -> dict:
         last = stderr[-1] if stderr else "unreachable"
         # Reaching the box but being refused is a different problem from the
         # box being off, and it has a specific fix, so it gets its own state.
-        row["state"] = "nokey" if "Permission denied" in last else "down"
+        # There is no authentication on this machine, so a local failure is
+        # never that -- offering to install a key would be nonsense.
+        refused = "Permission denied" in last and not is_local(host)
+        row["state"] = "nokey" if refused else "down"
         row["error"] = last
         return row
 
@@ -315,13 +365,29 @@ def _gib(megabytes: str) -> str:
 # ---------------------------------------------------------------------------
 
 def is_mounted(host: str) -> bool:
+    # This machine's files are already here, which is the state "mounted"
+    # exists to describe, so f opens them and u has nothing to undo.
+    if is_local(host):
+        return True
     try:
         return os.path.ismount(MNT_ROOT / host)
     except OSError:
         return False
 
 
+def files_root(host: str) -> Path:
+    """Where this host's files are on disk, once they are reachable."""
+    return Path.home() if is_local(host) else MNT_ROOT / host
+
+
+def files_label(host: str) -> str:
+    """That path as a prompt would write it."""
+    return "~" if is_local(host) else f"~/mnt/{host}"
+
+
 def mount(host: str) -> str:
+    if is_local(host):
+        return str(files_root(host))
     done = subprocess.run(["ssh-mount", host], stdin=subprocess.DEVNULL,
                           capture_output=True, text=True, timeout=40)
     if done.returncode != 0:
@@ -330,6 +396,8 @@ def mount(host: str) -> str:
 
 
 def unmount(host: str) -> None:
+    if is_local(host):
+        raise HostError("local is this machine -- nothing to unmount.")
     done = subprocess.run(["ssh-mount", "-u", host], stdin=subprocess.DEVNULL,
                           capture_output=True, text=True, timeout=20)
     if done.returncode != 0:
@@ -340,6 +408,42 @@ def open_files(path: str) -> None:
     subprocess.Popen(["xdg-open", path],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
+
+
+# Attaching on this machine is the session ssh-connect builds on the far side
+# with the transport taken out: same name, same F12, same banner, so a local
+# chat and a remote one behave identically once you are inside them.
+#
+# unset TMUX is what makes it work when the panel itself was started from
+# inside tmux. tmux refuses a nested attach outright; without this the key
+# would look like it did nothing. Unset, it becomes a second client on the
+# same server -- which works, at the cost of the inner status line being drawn
+# under the outer one.
+LOCAL_CONNECT = r"""
+printf '\033]0;%s\007' 'local/__SESSION__'
+unset TMUX
+exec tmux new-session -A -s '__SESSION__' \
+  \; bind-key -n F12 detach-client \
+  \; set-option -t '__SESSION__' status-left-length 40 \
+  \; set-option -t '__SESSION__' status-left '[local/__SESSION__] ' \
+  \; set-option -t '__SESSION__' display-time 5000 \
+  \; display-message 'F12  or  ctrl-b d   =   back to the server panel'
+"""
+
+
+def connect_argv(host: str, session: str) -> list[str]:
+    """How to attach to one session, wherever it lives.
+
+    Both halves are argv for a real terminal -- suspend the panel over it, or
+    hand it to launch() for a window of its own.
+    """
+    if is_local(host):
+        # The name is interpolated into a shell script, so it is filtered the
+        # same way ssh-connect filters its own argument rather than quoted:
+        # a session name is a label, and one that needs quoting is a mistake.
+        name = re.sub(r"[^A-Za-z0-9_-]", "_", session) or "shell"
+        return ["bash", "-c", LOCAL_CONNECT.replace("__SESSION__", name)]
+    return ["ssh-connect", host, session]
 
 
 SESSION_APP_ID = "org.omarchy.helm-session"
@@ -436,9 +540,7 @@ def watch_screens(host: str, interval: float = 1.0) -> subprocess.Popen:
     script = (WATCH_SCRIPT.replace("__INTERVAL__", str(interval))
                           .replace("__CAPLINES__", str(CAPTURE_LINES)))
     return subprocess.Popen(
-        ["ssh", "-n", "-o", "BatchMode=yes",
-         "-o", f"ConnectTimeout={CONNECT_TIMEOUT}",
-         "-o", "ServerAliveInterval=15", host, script],
+        run_argv(host, script, opts=["-o", "ServerAliveInterval=15"]),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         text=True, bufsize=1)
@@ -491,8 +593,7 @@ def send_text(host: str, session: str, text: str, submit: bool = True) -> None:
         return
 
     done = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={CONNECT_TIMEOUT}",
-         host, " && ".join(steps)],
+        run_argv(host, " && ".join(steps), stdin=True),
         input=text.encode(), capture_output=True, timeout=25)
 
     if done.returncode != 0:
@@ -503,9 +604,8 @@ def send_text(host: str, session: str, text: str, submit: bool = True) -> None:
 def send_key(host: str, session: str, key: str) -> None:
     """Send a single named key (Escape, C-c, Up...) to a remote session."""
     done = subprocess.run(
-        ["ssh", "-n", "-o", "BatchMode=yes",
-         "-o", f"ConnectTimeout={CONNECT_TIMEOUT}",
-         host, f"tmux send-keys -t {shlex.quote(session)} {shlex.quote(key)}"],
+        run_argv(host,
+                 f"tmux send-keys -t {shlex.quote(session)} {shlex.quote(key)}"),
         stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
     if done.returncode != 0:
         message = (done.stderr or b"").decode(errors="replace").strip()
@@ -515,5 +615,7 @@ def send_key(host: str, session: str, key: str) -> None:
 def copy_key(host: str) -> None:
     """ssh-copy-id needs a password typed, so it gets a real terminal window
     rather than being run headless behind the panel."""
+    if is_local(host):
+        raise HostError("local is this machine -- no key needed.")
     launch(["bash", "-lc",
             f"ssh-copy-id {host}; echo; read -rsn1 -p 'Press any key to close...'"])

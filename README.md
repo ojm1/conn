@@ -77,6 +77,26 @@ disk, mounts, and the session list.
 
 `HELM_NO_WATCH=1` falls back to plain polling.
 
+## This machine, too
+
+The first host in the list is `local` -- the laptop the panel is running on. It is not ssh to
+yourself: the probe, the watcher and the replies are the same POSIX shell scripts handed straight
+to `bash` instead of to `ssh`, so a local row needs no sshd, no key and no round trip. One function
+in `hosts.py` knows the difference; nothing else does.
+
+**It reads tmux, not terminals.** A `claude` running in a bare terminal window cannot be read by
+anything without attaching to it, and it dies when you close the window -- so it is not listed.
+Start local agents the way `ssh-connect` starts remote ones:
+
+```
+tmux new -A -s claude
+```
+
+and they show up here, survive the window closing, and can be replied to from the panel.
+
+`HELM_NO_LOCAL=1` hides the row. A `Host local` already in `~/.ssh/config` wins: an alias you can
+really ssh to beats one the panel invented.
+
 ## Keys
 
 | Key | Does |

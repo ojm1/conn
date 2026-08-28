@@ -904,7 +904,8 @@ class SSHPanel(App):
         text.append("\n")
         if row["mounted"]:
             text.append("files  ", style=PALETTE.muted)
-            text.append(f"~/mnt/{row['host']}\n", style=PALETTE.green)
+            text.append(f"{hosts.files_label(row['host'])}\n",
+                        style=PALETTE.green)
         text.append(f"checked {ago(row['checked'])}\n", style=PALETTE.muted)
         body.update(text)
 
@@ -1023,7 +1024,7 @@ class SSHPanel(App):
         into the panel.
         """
         with self.suspend():
-            subprocess.run(["ssh-connect", host, session])
+            subprocess.run(hosts.connect_argv(host, session))
         self.start_probe(host)
         self.status(f"back from {host}/{session}")
         self.refresh(layout=True)
@@ -1108,7 +1109,7 @@ class SSHPanel(App):
         """
         started = time.time()
         for host, session in targets:
-            hosts.launch(["ssh-connect", host, session])
+            hosts.launch(hosts.connect_argv(host, session))
             # let the compositor map and place each window before the next, or
             # they race and land on top of each other
             time.sleep(0.7)
@@ -1222,8 +1223,8 @@ class SSHPanel(App):
         if row is None:
             return
         if self.mount_state(row):
-            hosts.open_files(f"{hosts.MNT_ROOT / row['host']}")
-            self.status(f"{row['host']}: opening ~/mnt/{row['host']}")
+            hosts.open_files(str(hosts.files_root(row["host"])))
+            self.status(f"{row['host']}: opening {hosts.files_label(row['host'])}")
             return
         self.status(f"{row['host']}: mounting...")
         self.do_mount(row["host"])
@@ -1273,7 +1274,11 @@ class SSHPanel(App):
         row = self.selected()
         if row is None:
             return
-        hosts.copy_key(row["host"])
+        try:
+            hosts.copy_key(row["host"])
+        except hosts.HostError as exc:
+            self.status(f"{row['host']}: {exc}")
+            return
         self.status(f"{row['host']}: ssh-copy-id running in a new window "
                     "-- press r when it finishes")
 
