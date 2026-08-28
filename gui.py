@@ -310,6 +310,14 @@ class Helm(Gtk.ApplicationWindow):
         self.list.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self.list.connect("row-activated", self.row_activated)
         self.list.add_css_class("sidebar")
+        self.list.set_filter_func(self.matches)
+
+        self.filter = Gtk.SearchEntry()
+        self.filter.set_placeholder_text("filter")
+        self.filter.add_css_class("filter")
+        self.filter.connect("search-changed",
+                            lambda _e: self.list.invalidate_filter())
+        self.filter.connect("stop-search", lambda _e: self.clear_filter())
 
         scroller = Gtk.ScrolledWindow()
         scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -320,6 +328,7 @@ class Helm(Gtk.ApplicationWindow):
         side.add_css_class("side")
         side.set_size_request(300, -1)
         side.append(self._wordmark())
+        side.append(self.filter)
         side.append(scroller)
         side.append(self._footer())
 
@@ -379,6 +388,7 @@ class Helm(Gtk.ApplicationWindow):
                 ("F12", "back to the list"),
                 ("ctrl-shift-w", "close the view, leave the session running"),
                 ("ctrl-shift-k", "kill the selected session, for good"),
+                ("ctrl-f", "filter the list, esc clears it"),
                 ("F11 / ctrl-q", "fullscreen / quit")]
         for offset, (key, means) in enumerate(keys):
             row = len(marks) + offset + 1
@@ -454,10 +464,45 @@ class Helm(Gtk.ApplicationWindow):
         ])
 
     def host_menu(self, row, host: str, x: float, y: float) -> None:
-        self.popup(row, x, y, [
-            ("New session...", lambda: self.prompt_new_session(host), False),
-            ("Passwords and keys...", lambda: self.show_secrets(host), False),
-        ])
+        items = [("New session...", lambda: self.prompt_new_session(host), False),
+                 ("Passwords and keys...", lambda: self.show_secrets(host), False)]
+        if hosts.is_local(host):
+            items.append((f"Open {hosts.files_label(host)}",
+                          lambda: hosts.open_files(str(hosts.files_root(host))),
+                          False))
+        elif hosts.is_mounted(host):
+            items.append((f"Open {hosts.files_label(host)}",
+                          lambda: hosts.open_files(str(hosts.files_root(host))),
+                          False))
+            items.append(("Unmount", lambda: self.do_mount(host, False), False))
+        else:
+            items.append(("Mount files over sshfs",
+                          lambda: self.do_mount(host, True), False))
+            items.append(("Install my key (ssh-copy-id)",
+                          lambda: self.install_key(host), False))
+        self.popup(row, x, y, items)
+
+    def do_mount(self, host: str, mount: bool) -> None:
+        """sshfs on a worker: fusermount blocks for seconds on a busy mount,
+        and doing that on the main thread freezes the window."""
+        def work():
+            try:
+                if mount:
+                    path = hosts.mount(host)
+                    GLib.idle_add(hosts.open_files, path)
+                else:
+                    hosts.unmount(host)
+            except (hosts.HostError, OSError) as exc:
+                GLib.idle_add(self.complain, host, str(exc))
+                return
+            GLib.idle_add(self.render)
+        threading.Thread(target=work, daemon=True).start()
+
+    def install_key(self, host: str) -> None:
+        try:
+            hosts.copy_key(host)
+        except hosts.HostError as exc:
+            self.complain(host, str(exc))
 
     def popup(self, row, x: float, y: float, items) -> None:
         """One popover for both menus, parented to the list rather than to a
@@ -761,6 +806,7 @@ class Helm(Gtk.ApplicationWindow):
         bind("<ctrl>Page_Down", lambda _w, _a: self.cycle(1))
         bind("<ctrl>Page_Up", lambda _w, _a: self.cycle(-1))
         bind("F12", lambda _w, _a: self.focus_list())
+        bind("<ctrl>f", lambda _w, _a: (self.filter.grab_focus(), True)[1])
         bind("<ctrl><shift>w", lambda _w, _a: self.close_visible())
         # The title bar's close button goes with the title bar in fullscreen.
         bind("<ctrl>q", lambda _w, _a: (self.close(), True)[1])
@@ -981,6 +1027,7 @@ class Helm(Gtk.ApplicationWindow):
         .help {{ font-family: monospace; font-weight: bold;
                  color: {p.accent}; min-width: 26px; }}
         .link {{ color: {p.accent}; font-size: 0.85em; padding: 0; }}
+        .filter {{ margin: 0 12px 6px 12px; font-size: 0.9em; }}
         .locked {{ color: {p.red}; font-size: 0.8em; padding: 2px 8px; }}
         .action {{ min-width: 26px; min-height: 26px; padding: 2px; }}
         .secret {{ font-family: monospace; }}
@@ -1162,11 +1209,32 @@ class Helm(Gtk.ApplicationWindow):
             detail = f"{detail}  {session['agent']['detail']}"
         return detail
 
+    def matches(self, row) -> bool:
+        """Filter on what is written on the row.
+
+        A host that matches keeps its sessions, or filtering by host name
+        would hide everything on it -- which is the opposite of what typing a
+        host name means.
+        """
+        needle = self.filter.get_text().strip().lower()
+        if not needle:
+            return True
+        key = getattr(row, "key", None)
+        if key is None:
+            return needle in getattr(row, "host", "").lower()
+        return needle in key[0].lower() or needle in key[1].lower()
+
+    def clear_filter(self) -> None:
+        self.filter.set_text("")
+        self.list.invalidate_filter()
+        self.list.grab_focus()
+
     def _host_row(self, host: str, data: dict) -> Gtk.ListBoxRow:
         row = Gtk.ListBoxRow()
         # A host is a heading, not a destination: there is nothing to open on
         # it, so it neither highlights nor answers a click.
         row.key = None
+        row.host = host          # so the filter can read it off the row
         row.set_activatable(False)
         row.set_selectable(False)
         box = Gtk.Box(spacing=8)

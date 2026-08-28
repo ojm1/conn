@@ -145,19 +145,6 @@ is doing.
 Every session carries the number that opens it, so the shortcut is never counted out. Past nine the
 column is blank rather than promising a key that does not exist.
 
-## Keys (`--tui`)
-
-| Key | Does |
-|---|---|
-| `enter` | Reply to the selected chat, in place |
-| `enter` (empty box) | Submit the draft already sitting in that chat |
-| `o` / `w` | Open it in this window / in its own window |
-| `F12` | Leave a session, back to the list (`ctrl-b d` also works) |
-| `1`-`9` | Select a chat |
-| `s` / `v` / `/` | Sidebar / switch view / filter |
-| `n` `r` `f` `u` `a` `k` `e` | New shell, refresh, mount, unmount, add host, install key, edit config |
-| `?` | Full key guide, in the app |
-
 ## It tells you
 
 The panel is honest about who is waiting on you, but only to someone looking at it -- and the thing
@@ -197,25 +184,20 @@ literal newline inside the agent's input box instead of submitting.
 Requires Python 3.11+, GTK4 and VTE locally, and `tmux` on the hosts you connect to.
 
 ```bash
-sudo pacman -S gtk4 vte4 python-gobject          # the window
+sudo pacman -S gtk4 vte4 python-gobject
 mkdir -p ~/.local/share/helm/app
 cp *.py ~/.local/share/helm/app/
 cp bin/* ~/.local/bin/
-python3 -m venv --system-site-packages ~/.local/share/helm/venv
-~/.local/share/helm/venv/bin/pip install -r requirements.txt
 helm --check      # probe every host once and print what it found
 ```
 
-`--system-site-packages` is not optional: PyGObject is a system package, and a venv sealed off from
-it cannot see GTK at all.
+Nothing from pip, and no virtualenv: GTK, VTE and PyGObject are system packages, and a venv sealed
+off from them cannot see GTK at all.
 
 `cp helm.desktop ~/.local/share/applications/` if you want it in a launcher. It is a window now, so
 starting it through a TUI wrapper (`omarchy-launch-tui helm`, or a terminal binding) leaves an empty
 terminal sitting beside the real one -- the terminal is hosting a process that no longer draws
 anything in it.
-
-`helm --tui` is the terminal panel this grew out of. It is what you want over ssh, where there is
-no window to open, and it needs no GTK.
 
 Colours follow the [Omarchy](https://omarchy.org) desktop theme when present, and fall back to a
 built-in palette otherwise. `HELM_THEME=light|dark` forces it.

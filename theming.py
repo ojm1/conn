@@ -190,30 +190,3 @@ def load_palette() -> Palette:
     return Palette(FALLBACK_LIGHT if mode == "light" else FALLBACK_DARK,
                    f"built-in {mode}")
 
-
-def textual_theme(palette: Palette, name: str = "omarchy"):
-    """Wrap the palette as a Textual theme, so borders, scrollbars, the footer
-    and every $variable in the CSS follow it too."""
-    from textual.theme import Theme
-
-    return Theme(
-        name=name,
-        primary=palette.accent,
-        secondary=palette.blue,
-        accent=palette.accent,
-        foreground=palette.foreground,
-        background=palette.background,
-        surface=palette.surface,
-        panel=palette.panel,
-        success=palette.green,
-        warning=palette.yellow,
-        error=palette.red,
-        dark=palette.mode == "dark",
-        variables={
-            "text-muted": palette.muted,
-            "footer-key-foreground": palette.accent,
-            "block-cursor-background": palette.accent,
-            "block-cursor-foreground": palette.background,
-            "block-cursor-text-style": "bold",
-        },
-    )

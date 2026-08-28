@@ -2,5 +2,7 @@
 # Helm -- server panel launcher. The previous fzf version is still here as helm-fzf.
 # Only title an interactive terminal; --list/--check output gets piped.
 [ -t 1 ] && printf '\033]0;helm\007'
+# No venv: what is left needs nothing from pip. PyGObject, GTK and VTE are
+# system packages, and a venv sealed off from them could not see GTK at all.
 APP="$HOME/.local/share/helm"
-exec "$APP/venv/bin/python" "$APP/app/main.py" "$@"
+exec python3 "$APP/app/main.py" "$@"
