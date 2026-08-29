@@ -1,29 +1,34 @@
 # helm
 
-A terminal dashboard for the servers you keep coding-agent sessions on.
+A window for the servers you keep coding-agent sessions on.
 Reads **Claude Code** and **opencode**.
 
 Named for where you stand to watch every station at once.
 
-Installed as `helm` -- the command is `helm`. The repository is named `helm-tui` only so it
-does not collide with the Kubernetes package manager, which this is unrelated to.
+Installed as `helm` -- the command is `helm`. The repository is named `helm-tui` for the terminal
+panel this began as, and to stay out of the way of the Kubernetes package manager, which it is
+unrelated to.
 
 It lists every `tmux` session across every host in your `~/.ssh/config`, tells you **which ones are
-working and which are waiting on you**, shows each session's live screen, and lets you reply to a
-chat without attaching to it.
+working and which are waiting on you**, says so out loud when one starts waiting, and opens any of
+them in a terminal beside the list.
 
 ```
-        chat                 │ web-01/claude
- 1   !  web-01/claude        │ unsent draft  commit and push both
- 2   *  db-01/shell          │ attached  -  4m ago  -  live
-                             │
-                             │ SCREEN
-                             │ ● Restructured the Jobs column header into two rows:
-                             │ ✻ Cooked for 24m 14s
-                             │ ❯ commit and push both
-                             │
-                             │ enter  reply below   o  open it here   w  new window
+  ⎈  ╻ ╻┏━╸╻  ┏┳┓   │ [web-01/claude]
+     ┣━┫┣╸ ┃  ┃┃┃    │
+     ╹ ╹┗━╸┗━╸╹ ╹    │ ● Restructured the Jobs column header into two rows:
+     2 waiting on you│ ✻ Cooked for 24m 14s
+                     │ ❯ commit and push both
+  web-01             │
+  1  !  claude   ...  │
+  2  o  shell    ...  │
+  db-01              │
+  3  *  claude   ...  │
+                     │
+  ?  4/4 hosts       │
 ```
+
+Requires GTK4 and VTE. Nothing from pip.
 
 ## Why
 
@@ -167,17 +172,16 @@ an API key. They live in the desktop keyring, which the same login password alre
 stores nothing itself: a value is fetched when you press Show, masked again on Hide, and a copy is
 wiped off the clipboard after thirty seconds.
 
-## Replying safely
+## Replying
 
-Text is sent as a **tmux buffer**, never interpolated into a command line:
+You type into the session. It is a real terminal on a real pty -- not a text box that builds a
+command out of what you wrote -- so quotes, `$VAR`, backticks and semicolons are just characters,
+and there is no layer left for them to be a command in.
 
-```
-tmux load-buffer -b reply -  &&  tmux paste-buffer -t <session> -d  &&  tmux send-keys Enter
-```
-
-So quotes, `$VAR`, backticks and semicolons arrive verbatim and nothing you type can become a remote
-command. `Enter` is a separate keystroke on purpose — pasted as part of the buffer it lands as a
-literal newline inside the agent's input box instead of submitting.
+The panel it grew out of could not do that: attaching took the whole screen, so it sent replies as
+tmux buffers to avoid interpolating them into a command line. Opening a session next to the list
+made the safest version of that feature the same thing as not having it. (`hosts.send_text` is in
+the history if a reply-without-opening is ever wanted again.)
 
 ## Install
 
@@ -213,14 +217,11 @@ those landed on whichever workspace happened to be active, at whatever size dwin
 while the panel sat on another workspace entirely.
 
 tmux is still doing the real work on the far side -- it is what makes a session survive the window
-closing. You just stop seeing it as a window of its own.
+closing. You just stop seeing it as a window of its own. Each session names itself in tmux's status
+bar (`[web-01/claude]`), which is how you know which one you are typing into.
 
-## Notes for tiling WMs
-
-Windows label themselves in tmux's status bar (`[web-01/claude]`) because tiling compositors
-generally have no titlebars. Under Hyprland's `dwindle` layout a new window splits whichever window
-has focus, along its longer axis — so a tall panel gets halved. A column layout (`scrolling`, or
-`master`) keeps the list a full-height column.
+helm itself has no title bar: GTK hides it when a window goes fullscreen, so nothing that matters
+can live there.
 
 ## Licence
 

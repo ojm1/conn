@@ -614,48 +614,6 @@ def parse_frame(lines: list[str], host: str = "") -> dict[str, dict]:
     return frames
 
 
-def send_text(host: str, session: str, text: str, submit: bool = True) -> None:
-    """Type text into a remote session without attaching to it.
-
-    The text goes over as a tmux buffer rather than being interpolated into a
-    command line. That means quotes, backticks, $, newlines and anything else a
-    prompt might contain arrive verbatim instead of being chewed by two layers
-    of shell -- and nothing the user types can turn into a remote command.
-
-    Enter is sent as a separate keystroke: pasting it as part of the buffer
-    would land as a literal newline inside the agent's input box instead of
-    submitting.
-    """
-    target = shlex.quote(session)
-    steps = []
-    if text:
-        steps.append("tmux load-buffer -b panel_reply -")
-        steps.append(f"tmux paste-buffer -b panel_reply -t {target} -d")
-    if submit:
-        steps.append(f"tmux send-keys -t {target} Enter")
-    if not steps:
-        return
-
-    done = subprocess.run(
-        run_argv(host, " && ".join(steps), stdin=True),
-        input=text.encode(), capture_output=True, timeout=25)
-
-    if done.returncode != 0:
-        message = (done.stderr or b"").decode(errors="replace").strip()
-        raise HostError(message.splitlines()[-1] if message else "send failed")
-
-
-def send_key(host: str, session: str, key: str) -> None:
-    """Send a single named key (Escape, C-c, Up...) to a remote session."""
-    done = subprocess.run(
-        run_argv(host,
-                 f"tmux send-keys -t {shlex.quote(session)} {shlex.quote(key)}"),
-        stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
-    if done.returncode != 0:
-        message = (done.stderr or b"").decode(errors="replace").strip()
-        raise HostError(message.splitlines()[-1] if message else "send failed")
-
-
 # ---------------------------------------------------------------------------
 # The agent, and the secrets beside it
 # ---------------------------------------------------------------------------
