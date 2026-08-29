@@ -30,6 +30,10 @@ READY = "ready"          # idle at an empty prompt
 SHELL = "shell"          # not an agent session at all
 UNKNOWN = "unknown"
 
+# What a dialog is allowed to draw in front of its own text: box bars, carets,
+# bullets, indentation. Quote marks are deliberately not in it -- see BLOCKED.
+CHROME = r"""^[^\w\n"“”'`]*"""
+
 LABELS = {
     WORKING: "working",
     NEEDS_YOU: "needs you",
@@ -110,13 +114,24 @@ class ClaudeCode(Agent):
 
     # Blocked-on-you prompts. Several shapes across versions, so match
     # generously.
+    # Anchored to the start of a line, past whatever chrome is drawn in front
+    # of it -- box bars, carets, bullets, all of which are non-word characters.
+    # A prompt Claude Code is actually asking begins its line. The same words
+    # inside a sentence are someone *talking* about a prompt, and reading those
+    # as one is how a session discussing this file reported itself blocked.
+    #
+    # Quote marks are excluded from that chrome even though they are not word
+    # characters: a dialog never draws one in front of its question, and prose
+    # quoting a prompt lands one there every time -- including halfway down a
+    # sentence, where the terminal wrapped the line and left the quote at the
+    # front of the next one.
     BLOCKED = (
-        re.compile(r"\bDo you want to\b", re.I),
-        re.compile(r"\bWould you like to\b", re.I),
+        re.compile(CHROME + r"Do you want to\b", re.I | re.M),
+        re.compile(CHROME + r"Would you like to\b", re.I | re.M),
         re.compile(r"^\s*❯?\s*1\.\s*Yes\b", re.M),
-        re.compile(r"\(y/n\)", re.I),
-        re.compile(r"\bPress enter to continue\b", re.I),
-        re.compile(r"\bwaiting for your input\b", re.I),
+        re.compile(r"\(y/n\)\s*$", re.I | re.M),
+        re.compile(CHROME + r"Press enter to continue\b", re.I | re.M),
+        re.compile(CHROME + r"waiting for your input\b", re.I | re.M),
     )
 
     # "275.1k tokens"
@@ -249,10 +264,12 @@ class OpenCode(Agent):
     # to interrupt" once esc has been pressed a first time.
     BUSY = re.compile(r"\besc\s+(?:again\s+to\s+)?interrupt\b", re.I)
 
+    # Same rule as Claude Code's: the dialog's own lines, not a sentence that
+    # happens to contain the words.
     BLOCKED = (
-        re.compile(r"Permission required", re.I),
-        re.compile(r"\bAllow once\b", re.I),
-        re.compile(r"\bAllow always\b.*\bReject\b", re.I),
+        re.compile(CHROME + r"Permission required", re.I | re.M),
+        re.compile(CHROME + r"Allow once\b", re.I | re.M),
+        re.compile(CHROME + r"Allow always\b.*\bReject\b", re.I | re.M),
     )
 
     # The idle footer carries the context used, e.g. "7.4K (3%) · $0.00".

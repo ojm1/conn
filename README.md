@@ -66,6 +66,13 @@ on that basis.
 Anything unrecognised reports **unknown**, never idle: claiming a blocked chat is idle is the one
 failure that would make the tool worse than not looking.
 
+Markers are matched **at the start of a line**, past whatever chrome the dialog draws in front of
+them -- box bars, carets, indentation. A prompt Claude Code is asking begins its line; the same
+words inside a sentence are someone *talking* about a prompt. Quote marks are excluded from that
+chrome on purpose: prose puts one in front of the words every time, including at the start of a
+wrapped line, and a dialog never does. (A session working on helm reporting itself blocked is how
+this was found.)
+
 Everything read off a screen is read **backwards** -- the last match, not the first. A terminal
 scrolls, so the earliest "Cogitated for 26s", the earliest prompt and the earliest token count are
 all things that happened several turns ago and are merely still visible.

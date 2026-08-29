@@ -38,6 +38,18 @@ CLAUDE = {
     "two turns": (f"✻ Cogitated for 26s\n\n  all 6 rendered successfully.\n\n"
                   f"✻ Cooked for 1m 5s\n{RULE}\n❯ Try \"fix the bug\"\n{RULE}\n"
                   f"  ⏵⏵ auto mode on"),
+    # A real dialog, chrome and all -- the question is drawn at the start of
+    # its line, behind the box bar.
+    "boxed prompt": ("╭──────────────╮\n│ Bash command\n│\n│ rm -rf build\n│\n"
+                     "│ Do you want to proceed?\n│ ❯ 1. Yes\n│   2. No\n╰──────────────╯"),
+    # Someone *talking* about a prompt. This is a session working on helm,
+    # with the words on screen inside a sentence -- which is exactly how the
+    # local session reported itself blocked while it was busy writing this.
+    "prose about prompts": (
+        '  For the blocked prompt I kept the pattern order -- the question\n'
+        '  "Do you want to run rm -rf build?" tells you more than the "1. Yes"\n'
+        '  underneath it.\n\n✻ Churned for 2m 55s\n' + RULE +
+        '\n❯ Try "fix the bug"\n' + RULE + '\n  ⏵⏵ auto mode on'),
     # Same for a prompt you have already answered, sitting above a live one.
     "two prompts": (f"Do you want to make this edit?\n 1. Yes\n"
                     f"  ⎿ Updated main.py\n\n"
@@ -59,6 +71,8 @@ CASES = [
     ("claude background",    CLAUDE["background"], ["claude"], A.WORKING),
     ("claude after two turns", CLAUDE["two turns"], ["claude"], A.READY),
     ("claude second prompt",  CLAUDE["two prompts"], ["claude"], A.NEEDS_YOU),
+    ("claude boxed prompt",   CLAUDE["boxed prompt"], ["claude"], A.NEEDS_YOU),
+    ("claude talking about one", CLAUDE["prose about prompts"], ["claude"], A.READY),
 
     # Not an agent at all.
     ("plain shell",          "opencode_idle.txt",  ["bash"],   A.SHELL),
@@ -129,6 +143,9 @@ def main() -> int:
         ("the timing is the turn that just finished",
          A.classify(CLAUDE["two turns"], ["claude"])["detail"]
          == "Cooked for 1m 5s"),
+        ("a boxed prompt is quoted past its chrome",
+         A.classify(CLAUDE["boxed prompt"], ["claude"])["detail"]
+         == "Do you want to proceed?"),
         ("and the prompt is the one still waiting",
          "rm -rf build" in A.classify(CLAUDE["two prompts"], ["claude"])["detail"]),
         ("draft and blocked both call for a human",
