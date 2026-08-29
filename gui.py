@@ -864,6 +864,7 @@ class Helm(Gtk.ApplicationWindow):
                 return self.kill_selected()
 
         return False        # everything else belongs to the terminal
+
     def opened(self) -> list[Session]:
         """Open sessions in the order they were opened -- which is the order
         alt-1..9 counts in, and the order the list marks them."""

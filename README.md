@@ -137,16 +137,16 @@ who wrote it.
 | `ctrl-shift-c` / `ctrl-shift-v` | Copy / paste. Plain `ctrl-c` stays the interrupt |
 | `ctrl-click` a URL | Open it |
 | right-click in a session | Copy, paste, and every link on the screen -- including ones tmux wrapped |
+| hover a session | A bin appears: kill it, asked first -- there is no undo |
+| `ctrl-shift-k` | Kill the selected session |
+| right-click a row | The same, as a menu -- on a host too, for new session and its passwords |
+| `+` | New session on the selected host, local or remote |
+| server icon | Add a server to `~/.ssh/config` |
+| `?` (in the footer) | What the marks mean, the keys, and who wrote it |
 
 There is no title bar. GTK hides it fullscreen, so nothing that matters could live there anyway --
 the actions are under the wordmark and the `x` is in the footer, both on screen whatever the window
 is doing.
-| hover a session | A bin appears: kill it, asked first -- there is no undo |
-| `ctrl-shift-k` | Kill the selected session |
-| right-click | The same, as a menu -- on a host too, for new session and its passwords |
-| `+` | New session on the selected host, local or remote |
-| server icon | Add a server to `~/.ssh/config` |
-| `i` | What the marks mean, and the keys |
 
 Every session carries the number that opens it, so the shortcut is never counted out. Past nine the
 column is blank rather than promising a key that does not exist.
@@ -205,8 +205,8 @@ helm --check      # probe every host once and print what it found
 Nothing from pip, and no virtualenv: GTK, VTE and PyGObject are system packages, and a venv sealed
 off from them cannot see GTK at all.
 
-`cp helm.desktop ~/.local/share/applications/` if you want it in a launcher. It is a window now, so
-starting it through a TUI wrapper (`omarchy-launch-tui helm`, or a terminal binding) leaves an empty
+`cp org.omarchy.helm.desktop ~/.local/share/applications/` if you want it in a launcher. It is a
+window now, so starting it through a TUI wrapper (`omarchy-launch-tui helm`, or a terminal binding) leaves an empty
 terminal sitting beside the real one -- the terminal is hosting a process that no longer draws
 anything in it.
 
