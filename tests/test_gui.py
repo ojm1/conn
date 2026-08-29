@@ -212,6 +212,26 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     check("there is no title bar to lose them with",
           window.get_titlebar() is None and not window.get_decorated())
 
+    # -- the key guide, which is only useful if it is complete -------------
+    guide = " ".join(w.get_label() or "" for w in walk(
+        window.help_button.get_popover().get_child())
+        if isinstance(w, Gtk.Label)).lower()
+    # Add the row when you add the key: a guide that lists most of them reads
+    # as the whole set, and the ones left out are the ones nobody finds.
+    for wanted in ("alt-1..9", "ctrl-tab", "f12", "ctrl-shift-c / v",
+                   "ctrl-shift-a", "ctrl-shift-w", "ctrl-shift-k", "ctrl-f",
+                   "ctrl-+ - 0", "f11 / ctrl-q", "f1 or ?",
+                   "ctrl-click", "right-click a session", "right-click a host",
+                   "right-click the screen", "hover a session"):
+        check(f"the guide has {wanted}", wanted in guide,
+              "a key nobody can find is a key that does not exist")
+    _, natural = window.help_button.get_popover().get_child().get_preferred_size()
+    check("and fits on a laptop screen, popovers being clipped and not scrolled",
+          natural.height <= 600, f"height={natural.height}")
+    check("and says what every mark means",
+          all(word in guide for word in ("needs you", "unsent draft", "working",
+                                         "idle", "shell", "unknown")))
+
     # -- font, and the size you set it to ----------------------------------
     import tempfile
     import theming

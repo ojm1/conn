@@ -13,7 +13,7 @@ USAGE = """helm -- your servers, and what is running on them
   helm --help            this message
 
 Inside the window:
-  ?              the key guide, at the foot of the list
+  F1 or ?        the key guide -- every key and mouse action
   alt-1..alt-9   open the session with that number
   ctrl-tab       next open session (ctrl-shift-tab for the last)
   F12            back to the list      F11  fullscreen

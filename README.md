@@ -136,6 +136,7 @@ who wrote it.
 | `ctrl-q` | Quit |
 | `ctrl-shift-c` / `ctrl-shift-v` | Copy / paste. Plain `ctrl-c` stays the interrupt |
 | `ctrl-+` / `ctrl--` / `ctrl-0` | Text bigger, smaller, back to the terminal's own size |
+| `ctrl-shift-a` | Select everything on the screen |
 | `ctrl-click` a URL | Open it |
 | right-click in a session | Copy, paste, and every link on the screen -- including ones tmux wrapped |
 | hover a session | A bin appears: kill it, asked first -- there is no undo |
@@ -143,7 +144,7 @@ who wrote it.
 | right-click a row | The same, as a menu -- on a host too, for new session and its passwords |
 | `+` | New session on the selected host, local or remote |
 | server icon | Add a server to `~/.ssh/config` |
-| `?` (in the footer) | What the marks mean, the keys, and who wrote it |
+| `F1` or `?` | The guide: what the marks mean, every key, and who wrote it |
 
 There is no title bar. GTK hides it fullscreen, so nothing that matters could live there anyway --
 the actions are under the wordmark and the `x` is in the footer, both on screen whatever the window

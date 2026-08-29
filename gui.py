@@ -436,16 +436,37 @@ class Helm(Gtk.ApplicationWindow):
             hint.add_css_class("detail")
             grid.attach(hint, 2, row, 1, 1)
 
-        keys = [("alt-1..9", "open the session with that number"),
-                ("ctrl-tab", "next open session"),
-                ("F12", "back to the list"),
-                ("ctrl-shift-w", "close the view, leave the session running"),
-                ("ctrl-shift-k", "kill the selected session, for good"),
-                ("ctrl-f", "filter the list, esc clears it"),
-                ("ctrl-+ - 0", "text bigger, smaller, back to normal"),
-                ("F11 / ctrl-q", "fullscreen / quit")]
-        for offset, (key, means) in enumerate(keys):
+        # Everything the window answers to. A guide that lists some of the
+        # keys is worse than none: it is read as the whole set, so the ones
+        # left out are the ones nobody ever finds.
+        rows = [
+            ("keys", ""),
+            ("alt-1..9", "open the session with that number"),
+            ("ctrl-tab", "next open session -- add shift to go back"),
+            ("F12", "back to the list; arrows move, enter opens"),
+            ("ctrl-shift-c / v", "copy / paste -- plain ctrl-c is the interrupt"),
+            ("ctrl-shift-a", "select everything on the screen"),
+            ("ctrl-shift-w", "close the view, leave the session running"),
+            ("ctrl-shift-k", "kill the selected session, for good"),
+            ("ctrl-f", "filter the list, esc clears it"),
+            ("ctrl-+ - 0", "text bigger, smaller, back to your terminal's size"),
+            ("F11 / ctrl-q", "fullscreen / quit"),
+            ("F1 or ?", "this guide"),
+            ("mouse", ""),
+            ("ctrl-click", "open a link in a session"),
+            ("right-click a session", "open it, or kill it"),
+            ("right-click a host", "new session, files over sshfs, its passwords"),
+            ("right-click the screen", "copy, paste, and every link on it"),
+            ("hover a session", "the bin at the end of the row kills it"),
+            ("+ / server icon", "new session here / add a host to ~/.ssh/config"),
+        ]
+        for offset, (key, means) in enumerate(rows):
             row = len(marks) + offset + 1
+            if not means:               # a heading, not a key
+                heading = Gtk.Label(label=key, xalign=0, margin_top=10)
+                heading.add_css_class("host")
+                grid.attach(heading, 0, row, 3, 1)
+                continue
             label = Gtk.Label(label=key, xalign=0)
             label.add_css_class("tab")
             grid.attach(label, 0, row, 2, 1)
@@ -454,7 +475,22 @@ class Helm(Gtk.ApplicationWindow):
             grid.attach(hint, 2, row, 1, 1)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.append(grid)
+        # Scrolled, because a popover is clipped to what fits between the
+        # button and the edge of the screen -- and it is anchored to the foot
+        # of the list, where there is least room. Silently losing the last few
+        # rows is exactly how a key goes missing from a key guide.
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_propagate_natural_height(True)
+        scroller.set_propagate_natural_width(True)
+        # Measured, not guessed: the full list is ~570px of rows and this
+        # laptop's screen is 750 logical pixels tall, with the button at the
+        # foot of the list. It did not fit, and GTK clips a popover rather
+        # than scrolling one -- which is how ctrl-+ was in the guide, in the
+        # build, and still nowhere anybody could see it.
+        scroller.set_max_content_height(400)
+        scroller.set_child(grid)
+        box.append(scroller)
 
         rule = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
         rule.set_margin_start(12)
@@ -877,6 +913,13 @@ class Helm(Gtk.ApplicationWindow):
         if name == "f11":
             return self.toggle_fullscreen()
 
+        # F1 always; "?" only when it is not a character someone is typing.
+        # A guide you have to find with the mouse is one the keyboard user
+        # never opens -- and "?" is what the panel this grew out of used.
+        if name == "f1" or (name == "question" and not self.typing()):
+            self.help_button.popup()
+            return True
+
         if ctrl and not shift:
             if name == "f":
                 self.filter.grab_focus()
@@ -906,6 +949,12 @@ class Helm(Gtk.ApplicationWindow):
                 return self.kill_selected()
 
         return False        # everything else belongs to the terminal
+
+    def typing(self) -> bool:
+        """Whether the keystroke belongs to something taking text: a session's
+        terminal, or the filter box. Everything else is helm's to bind."""
+        focus = self.get_focus()
+        return isinstance(focus, (Vte.Terminal, Gtk.Editable, Gtk.Text))
 
     def zoom_by(self, factor: float) -> bool:
         return self.set_zoom(self.zoom * factor)
@@ -1053,11 +1102,12 @@ class Helm(Gtk.ApplicationWindow):
                       margin_start=10, margin_end=10)
         bar.add_css_class("footer")
 
-        help_button = Gtk.MenuButton(label="?")
-        help_button.add_css_class("help")
-        help_button.set_tooltip_text("What the marks mean, the keys, and who wrote it")
-        help_button.set_popover(self._guide())
-        bar.append(help_button)
+        self.help_button = Gtk.MenuButton(label="?")
+        self.help_button.add_css_class("help")
+        self.help_button.set_tooltip_text(
+            "What the marks mean, the keys, and who wrote it -- F1, or ?")
+        self.help_button.set_popover(self._guide())
+        bar.append(self.help_button)
 
         self.footnote = Gtk.Label(label="", xalign=0)
         self.footnote.add_css_class("detail")
