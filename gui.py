@@ -100,11 +100,16 @@ class Session(Gtk.Box):
     taking over a terminal.
     """
 
-    def __init__(self, host: str, name: str, palette, on_exit):
+    def __init__(self, host: str, name: str, palette, on_exit, screen=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.host = host
         self.name = name
         self.on_exit = on_exit
+        # What the far side thinks is on this screen. The panel is already
+        # capturing it every second for the state; the menu reads links out of
+        # the same text, which is the only copy where a wrapped URL can be put
+        # back together.
+        self.screen = screen or (lambda: "")
 
         self.term = Vte.Terminal()
         self.term.set_hexpand(True)
@@ -223,6 +228,15 @@ class Session(Gtk.Box):
             item(f"Open {uri[:44]}",
                  lambda: Gtk.UriLauncher(uri=uri).launch(None, None, None, None))
             item("Copy link", lambda: self.to_clipboard(uri))
+
+        # Links the pointer is not on, and long ones the terminal cannot see
+        # as links at all because tmux delivered them in pieces.
+        for link in [u for u in hosts.screen_links(self.screen())
+                     if u != uri][:5]:
+            shown = link if len(link) <= 44 else link[:41] + "..."
+            item(f"Open {shown}",
+                 lambda u=link: Gtk.UriLauncher(uri=u).launch(None, None, None, None))
+            item(f"Copy {shown}", lambda u=link: self.to_clipboard(u))
         item("Copy", self.copy, self.term.get_has_selection())
         item("Paste", self.paste)
         item("Select all", self.term.select_all)
@@ -778,48 +792,72 @@ class Helm(Gtk.ApplicationWindow):
         window.present()
 
     def _shortcuts(self) -> None:
-        """Keys for switching, taken before the terminal sees them.
+        """Keys, matched by hand rather than by accelerator.
 
-        CAPTURE phase is the whole point: a focused VTE swallows almost
-        everything, and alt-1 in particular it would send on as ESC-1. The
-        window has to claim these on the way down or they never arrive.
+        GtkShortcutController looked like the right tool and quietly is not:
+        an accelerator asking for CTRL+SHIFT+c never fires, because shift is
+        consumed producing the C the event actually carries, and what is left
+        no longer matches what was asked for. Nothing errors -- the shortcut
+        simply does nothing, which is how ctrl-shift-c, -v, -w and -k were all
+        dead without anyone noticing.
 
-        That means F12 no longer reaches tmux, where ssh-connect binds it to
-        detach. In a window with a session list down the side there is nothing
-        to detach back to -- so it does the same job one level up, and puts you
-        back on the list.
+        A key controller hands over the keyval and the modifiers and lets this
+        decide. It is longer, and it is readable, and it can be tested without
+        a keyboard.
+
+        CAPTURE phase because a focused VTE swallows nearly everything: alt-1
+        it would forward to the shell as ESC-1.
         """
-        keys = Gtk.ShortcutController()
+        keys = Gtk.EventControllerKey()
         keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        keys.connect("key-pressed", self.key_pressed)
         self.add_controller(keys)
 
-        def bind(accel: str, handler):
-            keys.add_shortcut(Gtk.Shortcut(
-                trigger=Gtk.ShortcutTrigger.parse_string(accel),
-                action=Gtk.CallbackAction.new(handler)))
+    def key_pressed(self, _controller, keyval, _code, state) -> bool:
+        """True means helm took the key; False leaves it to the terminal."""
+        ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
+        shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
+        alt = bool(state & Gdk.ModifierType.ALT_MASK)
+        # Lowered, because shift has already turned c into C by the time this
+        # sees it -- which is the whole reason accelerators did not work.
+        name = (Gdk.keyval_name(Gdk.keyval_to_lower(keyval)) or "").lower()
 
-        for n in range(1, 10):
-            bind(f"<alt>{n}",
-                 lambda _w, _a, index=n - 1: self.show_nth(index))
-        bind("<ctrl>Tab", lambda _w, _a: self.cycle(1))
-        bind("<ctrl><shift>Tab", lambda _w, _a: self.cycle(-1))
-        bind("<ctrl>Page_Down", lambda _w, _a: self.cycle(1))
-        bind("<ctrl>Page_Up", lambda _w, _a: self.cycle(-1))
-        bind("F12", lambda _w, _a: self.focus_list())
-        bind("<ctrl>f", lambda _w, _a: (self.filter.grab_focus(), True)[1])
-        bind("<ctrl><shift>w", lambda _w, _a: self.close_visible())
-        # The title bar's close button goes with the title bar in fullscreen.
-        bind("<ctrl>q", lambda _w, _a: (self.close(), True)[1])
-        bind("<ctrl><shift>k", lambda _w, _a: self.kill_selected())
-        # VTE binds no keys of its own: without these, a terminal has no copy
-        # and no paste at all. Plain ctrl-c stays the interrupt it has to be.
-        bind("<ctrl><shift>c", lambda _w, _a: self.on_terminal("copy"))
-        bind("<ctrl><shift>v", lambda _w, _a: self.on_terminal("paste"))
-        bind("<ctrl><shift>a", lambda _w, _a: self.on_terminal("select_all"))
-        bind("F11", lambda _w, _a: self.toggle_fullscreen())
+        if alt and not ctrl and name.isdigit() and name != "0":
+            return self.show_nth(int(name) - 1)
 
-    # -- switching ---------------------------------------------------------
+        if ctrl and name in ("tab", "iso_left_tab"):
+            return self.cycle(-1 if shift else 1)
+        if ctrl and name == "page_down":
+            return self.cycle(1)
+        if ctrl and name == "page_up":
+            return self.cycle(-1)
 
+        if name == "f12":
+            return self.focus_list()
+        if name == "f11":
+            return self.toggle_fullscreen()
+
+        if ctrl and not shift:
+            if name == "f":
+                self.filter.grab_focus()
+                return True
+            if name == "q":
+                self.close()
+                return True
+
+        if ctrl and shift:
+            if name == "c":
+                return self.on_terminal("copy")
+            if name == "v":
+                return self.on_terminal("paste")
+            if name == "a":
+                return self.on_terminal("select_all")
+            if name == "w":
+                return self.close_visible()
+            if name == "k":
+                return self.kill_selected()
+
+        return False        # everything else belongs to the terminal
     def opened(self) -> list[Session]:
         """Open sessions in the order they were opened -- which is the order
         alt-1..9 counts in, and the order the list marks them."""
@@ -1344,13 +1382,21 @@ class Helm(Gtk.ApplicationWindow):
             self.show(self.open[key])
             return
 
-        session = Session(host, name, self.palette, self.close_session)
+        session = Session(host, name, self.palette, self.close_session,
+                          screen=lambda h=host, n=name: self.screen_of(h, n))
         self.open[key] = session
         self.stack.add_named(session, f"{host}/{name}")
         self.show(session)
         # The number beside it goes accent once it is open, and that is drawn
         # by the list rather than by the stack.
         self.repaint()
+
+    def screen_of(self, host: str, name: str) -> str:
+        """The last screen the watcher brought back for one session."""
+        for session in self.rows.get(host, {}).get("sessions", []):
+            if session["name"] == name:
+                return session.get("screen", "")
+        return ""
 
     def close_session(self, session: Session) -> None:
         """A session whose command ended takes its terminal with it.

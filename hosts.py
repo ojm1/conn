@@ -759,6 +759,50 @@ def secret_clear(host: str, name: str) -> None:
         raise HostError((done.stderr or "could not remove").strip().splitlines()[-1])
 
 
+# What a URL looks like, minus the punctuation that ends a sentence rather
+# than an address.
+URL = re.compile(r"(?:https?://|ftp://|file://|mailto:)"
+                 r"[^\s<>\"'`{}|\\^\[\]]*[^\s<>\"'`{}|\\^\[\].,;:!?)]")
+
+
+def screen_links(screen: str) -> list[str]:
+    """Every URL on a screen, including ones wrapped across rows.
+
+    A terminal can normally join a wrapped line back together, because it
+    knows it wrapped it. Inside tmux nothing does: tmux redraws a pane row by
+    row, and a long URL arrives as several lines with no record that they were
+    ever one. That is why clicking a login link works until the link is long
+    enough to matter.
+
+    What survives is its shape -- a row ending without a space, followed by a
+    row that is one unbroken token starting hard against the left margin --
+    and continuation is only considered while the line so far is already a
+    URL. Two ordinary full-width lines do not meet that.
+    """
+    out: list[str] = []
+    buffer = ""
+    for raw in screen.splitlines():
+        line = raw.rstrip()
+        token = line.strip()
+        if (buffer and "://" in buffer and token and " " not in token
+                and not raw[:1].isspace()):
+            buffer += token
+            continue
+        if buffer:
+            out.append(buffer)
+        buffer = line
+    if buffer:
+        out.append(buffer)
+
+    found: list[str] = []
+    for line in out:
+        for match in URL.finditer(line):
+            url = match.group(0)
+            if url not in found:
+                found.append(url)
+    return found
+
+
 def kill_session(host: str, session: str) -> None:
     """End a tmux session and everything running in it.
 

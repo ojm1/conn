@@ -197,6 +197,26 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     check("which ends that session", alpha[1] not in left, f"left={left}")
     check("and leaves the one beside it", beta[1] in left, f"left={left}")
 
+    # -- links, including the ones tmux delivered in pieces -----------------
+    wrapped = ("  Browser didn't open? Use the url below to sign in\n"
+               "\n"
+               "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a\n"
+               "&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com\n"
+               "&state=R5GTtVz03mLeyVZRzhDoEcK\n"
+               "\n"
+               "  Waiting, or press (c) to copy\n")
+    found = hosts.screen_links(wrapped)
+    check("a URL wrapped across rows comes back whole",
+          found and found[0].endswith("R5GTtVz03mLeyVZRzhDoEcK") and len(found[0]) > 120,
+          f"found={found}")
+    check("and only that one", len(found) == 1, f"found={found}")
+    prose = "see https://example.com/x, and (https://example.com/y) too\nplain text\n"
+    check("ordinary links still come out one each",
+          hosts.screen_links(prose) == ["https://example.com/x", "https://example.com/y"],
+          f"found={hosts.screen_links(prose)}")
+    check("two full-width lines are not glued into one",
+          hosts.screen_links("a" * 130 + "\n" + "b" * 130 + "\n") == [])
+
     # -- secrets -----------------------------------------------------------
     hosts.secret_store("helmtest-host", "db", "pa55w0rd")
     check("a secret goes into the keyring",
