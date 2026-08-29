@@ -32,6 +32,16 @@ CLAUDE = {
     "draft": f"{RULE}\n❯ finish the migration\n{RULE}\n  ⏵⏵ auto mode on",
     "idle": f"✻ Cooked for 12s\n{RULE}\n❯ Try \"fix the bug\"\n{RULE}\n  ⏵⏵ auto mode on",
     "background": f"{RULE}\n❯ \n{RULE}\n  3/8 agents done · 1m 2s ·",
+    # Two finished turns still on screen. The one underneath is the one that
+    # just happened; reading forwards reported the older one for as long as it
+    # stayed visible.
+    "two turns": (f"✻ Cogitated for 26s\n\n  all 6 rendered successfully.\n\n"
+                  f"✻ Cooked for 1m 5s\n{RULE}\n❯ Try \"fix the bug\"\n{RULE}\n"
+                  f"  ⏵⏵ auto mode on"),
+    # Same for a prompt you have already answered, sitting above a live one.
+    "two prompts": (f"Do you want to make this edit?\n 1. Yes\n"
+                    f"  ⎿ Updated main.py\n\n"
+                    f"Do you want to run rm -rf build?\n 1. Yes\n{RULE}\n❯ \n{RULE}"),
 }
 
 CASES = [
@@ -47,6 +57,8 @@ CASES = [
     ("claude draft",         CLAUDE["draft"],      ["claude"], A.DRAFT),
     ("claude idle",          CLAUDE["idle"],       ["claude"], A.READY),
     ("claude background",    CLAUDE["background"], ["claude"], A.WORKING),
+    ("claude after two turns", CLAUDE["two turns"], ["claude"], A.READY),
+    ("claude second prompt",  CLAUDE["two prompts"], ["claude"], A.NEEDS_YOU),
 
     # Not an agent at all.
     ("plain shell",          "opencode_idle.txt",  ["bash"],   A.SHELL),
@@ -108,9 +120,17 @@ def main() -> int:
         ("claude still reports context",
          A.classify("300.2k tokens\n" + CLAUDE["idle"],
                     ["claude"])["tokens"] == "300.2k"),
+        ("and the count it reports is the current one",
+         A.classify("120.0k tokens\nlater\n559.6k tokens\n" + CLAUDE["idle"],
+                    ["claude"])["tokens"] == "559.6k"),
         ("the agent is named",
          A.classify(screen_for("opencode_idle.txt"),
                     ["opencode"])["agent"] == "opencode"),
+        ("the timing is the turn that just finished",
+         A.classify(CLAUDE["two turns"], ["claude"])["detail"]
+         == "Cooked for 1m 5s"),
+        ("and the prompt is the one still waiting",
+         "rm -rf build" in A.classify(CLAUDE["two prompts"], ["claude"])["detail"]),
         ("draft and blocked both call for a human",
          A.needs_attention(A.DRAFT) and A.needs_attention(A.NEEDS_YOU)),
         ("working and idle do not",

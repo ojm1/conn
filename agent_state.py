@@ -72,17 +72,25 @@ class Agent:
         return ""
 
     def tokens(self, screen: str) -> str:
-        if self.TOKENS:
-            match = self.TOKENS.search(screen)
-            if match:
-                return match.group(1)
-        return ""
+        """The last count on screen: a transcript can carry older ones from a
+        /context or a compaction notice, and the footer is below all of them."""
+        return last_match(self.TOKENS, screen) if self.TOKENS else ""
 
     def blocked_detail(self, screen: str) -> str:
+        """The newest match of the most telling pattern.
+
+        Pattern order is a preference -- the question a prompt asks says more
+        than the "1. Yes" underneath it -- so that is kept. Within one pattern
+        it is the *last* match that matters: a prompt you already answered
+        stays in the transcript above the one still waiting, and quoting the
+        old one is how the panel described the wrong prompt.
+        """
         for pattern in self.BLOCKED:
-            match = pattern.search(screen)
-            if match:
-                line = screen[match.start():].splitlines()[0]
+            newest = None
+            for match in pattern.finditer(screen):
+                newest = match
+            if newest is not None:
+                line = screen[newest.start():].splitlines()[0]
                 return line.strip().strip("│┃ ")[:60]
         return "waiting for you"
 
@@ -197,12 +205,10 @@ class ClaudeCode(Agent):
         spins = self.SPINNER.findall(screen)
         if spins:
             return spins[-1].strip()[:60]
-        action = self.LAST_ACTION.search(screen)
-        return action.group(1).strip()[:60] if action else "working"
+        return last_match(self.LAST_ACTION, screen)[:60] or "working"
 
     def idle_detail(self, screen: str) -> str:
-        action = self.LAST_ACTION.search(screen)
-        return action.group(1).strip() if action else ""
+        return last_match(self.LAST_ACTION, screen)
 
     def background(self, screen: str) -> str:
         agents = self.AGENTS.search(screen)
@@ -309,8 +315,7 @@ class OpenCode(Agent):
         return "working"
 
     def idle_detail(self, screen: str) -> str:
-        action = self.LAST_ACTION.search(screen)
-        return action.group(1).strip() if action else ""
+        return last_match(self.LAST_ACTION, screen)
 
 
 AGENTS: tuple[Agent, ...] = (ClaudeCode(), OpenCode())
@@ -333,6 +338,19 @@ def detect(commands: list[str]) -> Agent | None:
 
 SGR = re.compile(r"\x1b\[([0-9;]*)m")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def last_match(pattern: re.Pattern, screen: str) -> str:
+    """The last time a pattern appears on the screen, which is the most recent
+    one. A terminal scrolls: the *first* match is the oldest turn still
+    visible, so searching forwards reported a session's timing from something
+    it finished several turns ago -- "Cogitated for 26s" while the screen
+    plainly said "Cooked for 1m 5s" underneath it.
+    """
+    found = ""
+    for match in pattern.finditer(screen):
+        found = match.group(1).strip()
+    return found
 
 
 def strip_ansi(text: str) -> str:

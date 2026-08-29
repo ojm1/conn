@@ -66,6 +66,10 @@ on that basis.
 Anything unrecognised reports **unknown**, never idle: claiming a blocked chat is idle is the one
 failure that would make the tool worse than not looking.
 
+Everything read off a screen is read **backwards** -- the last match, not the first. A terminal
+scrolls, so the earliest "Cogitated for 26s", the earliest prompt and the earliest token count are
+all things that happened several turns ago and are merely still visible.
+
 A redesign on either side can break these markers. `tests/test_agent_state.py` runs the reader
 against real captured screens — `python3 tests/test_agent_state.py`, no test dependencies — so a
 break shows up as a failure rather than as a quietly wrong dashboard.
