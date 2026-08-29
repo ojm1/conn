@@ -135,6 +135,7 @@ who wrote it.
 | `F11` | Fullscreen, and back |
 | `ctrl-q` | Quit |
 | `ctrl-shift-c` / `ctrl-shift-v` | Copy / paste. Plain `ctrl-c` stays the interrupt |
+| `ctrl-+` / `ctrl--` / `ctrl-0` | Text bigger, smaller, back to the terminal's own size |
 | `ctrl-click` a URL | Open it |
 | right-click in a session | Copy, paste, and every link on the screen -- including ones tmux wrapped |
 | hover a session | A bin appears: kill it, asked first -- there is no undo |
@@ -212,6 +213,21 @@ anything in it.
 
 Colours follow the [Omarchy](https://omarchy.org) desktop theme when present, and fall back to a
 built-in palette otherwise. `HELM_THEME=light|dark` forces it.
+
+## The font is the one you already chose
+
+A session inside helm should be the size of the terminals beside it, so the font is not helm's to
+pick: it is read out of the config of the terminal this machine actually has -- foot, ghostty,
+alacritty or kitty, first one whose config is readable **and** whose binary is installed. Only if
+none is does it fall back to `monospace 11`.
+
+`HELM_FONT="JetBrainsMono Nerd Font 11"` overrides that outright.
+
+`ctrl-+`, `ctrl--` and `ctrl-0` zoom, the way a terminal does -- a multiplier on that font rather
+than a second opinion about it, applied to every session at once and remembered in
+`~/.local/state/helm/zoom`. Worth knowing if it still looks off: your terminal may scale points by
+the monitor's DPI where GTK uses the desktop's text-scaling factor, so the same "9" can land a
+little different. That is what the zoom is for.
 
 ## One window
 

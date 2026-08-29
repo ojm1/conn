@@ -212,6 +212,41 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     check("there is no title bar to lose them with",
           window.get_titlebar() is None and not window.get_decorated())
 
+    # -- font, and the size you set it to ----------------------------------
+    import tempfile
+    import theming
+
+    with tempfile.TemporaryDirectory() as tmp:
+        conf = Path(tmp) / "foot.ini"
+        conf.write_text("[main]\n# a comment\n"
+                        "font=JetBrainsMono Nerd Font:size=9, Noto Emoji:size=9\n")
+        # "sh" stands in for the terminal's binary: what is being checked is
+        # that a config is only read when that terminal is actually installed.
+        found = theming.terminal_font([("sh", conf, theming._foot_font)])
+        check("the session font comes from this machine's terminal",
+              found == "JetBrainsMono Nerd Font 9", f"font={found}")
+        check("a terminal that is not installed is not consulted",
+              theming.terminal_font([("no-such-terminal-xyz", conf,
+                                      theming._foot_font)]) == theming.FALLBACK_FONT)
+
+        os.environ["HELM_FONT"] = "Fira Code 12"
+        check("and HELM_FONT wins over both",
+              theming.terminal_font([("sh", conf, theming._foot_font)])
+              == "Fira Code 12")
+        del os.environ["HELM_FONT"]
+
+        gui.ZOOM_STATE = Path(tmp) / "zoom"
+        window.set_zoom(1.3)
+        scales = [s.term.get_font_scale() for s in window.open.values()]
+        check("zooming resizes every open session", scales and
+              all(abs(scale - 1.3) < 0.001 for scale in scales), f"scales={scales}")
+        check("and it survives the next run", abs(gui.read_zoom() - 1.3) < 0.001,
+              f"read={gui.read_zoom()}")
+        window.set_zoom(99.0)
+        check("nothing can be zoomed off the screen", window.zoom == gui.ZOOM_MAX,
+              f"zoom={window.zoom}")
+        window.set_zoom(1.0)
+
     # -- killing -----------------------------------------------------------
     kills = [c for c in walk(row_for(window, alpha))
              if isinstance(c, Gtk.Button) and c.has_css_class("kill")]

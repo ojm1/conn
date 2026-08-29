@@ -7,27 +7,32 @@ import sys
 
 USAGE = """helm -- your servers, and what is running on them
 
-  helm                   open the panel
+  helm                   open the window
   helm --list            print host names (for scripts)
   helm --check           probe every host once and print the result
   helm --help            this message
 
-Inside the panel:
-  ?        the full key guide, without leaving the panel
-  enter    reply to the selected chat, without leaving the panel
-  enter    (with an empty box) submits whatever draft is already sitting there
-  o        open the chat in this window   F12  come back (or ctrl-b d)
-  w        open it in its own window     W    open all that need you
-  1-9      select a chat                  s  sidebar    v  chats <-> hosts
-  n        new shell session              r  refresh
-  f / u    mount / unmount                a  add server  k  install your key
-  e        edit ~/.ssh/config             /  filter      q  quit
+Inside the window:
+  ?              the key guide, at the foot of the list
+  alt-1..alt-9   open the session with that number
+  ctrl-tab       next open session (ctrl-shift-tab for the last)
+  F12            back to the list      F11  fullscreen
+  ctrl-shift-w   close the view        ctrl-shift-k  kill the session
+  ctrl-shift-c/v copy / paste          ctrl-f        filter
+  ctrl-+ - 0     text bigger, smaller, back to the terminal's own size
+  ctrl-q         quit
+  right-click    a host for new session, files, keys; a session to open or kill
 
 Chat states:  working | needs you | unsent draft | idle | shell
 
-The main pane is a live view of the chat's screen, updated about once a second.
+The list is a live view of every session's screen, updated about once a second.
 HELM_NO_WATCH=1 disables streaming and falls back to 45s polling.
 HELM_NO_LOCAL=1 drops the 'local' row for this machine.
+
+Sessions use the font this machine's terminal is configured with, so they
+match the terminals beside them. HELM_FONT="JetBrainsMono Nerd Font 11"
+overrides it, and ctrl-+ / ctrl-- / ctrl-0 zoom, remembered between runs.
+HELM_THEME=light|dark forces the colours.
 """
 
 

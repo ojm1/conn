@@ -20,6 +20,7 @@ import queue
 import random
 import threading
 import time
+from pathlib import Path
 
 import gi
 
@@ -31,7 +32,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk, Pango, Vte  # noqa: E402
 
 import agent_state  # noqa: E402
 import hosts  # noqa: E402
-from theming import load_palette  # noqa: E402
+from theming import load_palette, terminal_font  # noqa: E402
 
 APP_ID = "org.omarchy.helm"
 HOME_PAGE = "https://www.ojm.co"
@@ -65,6 +66,13 @@ WATCH_HEALTHY = 30.0     # a stream that lasted this long was not a refusal
 # loud. Typing is a draft too -- see draft_settled().
 DRAFT_DWELL = 120.0
 
+# Zoom, the way every terminal does it: a multiplier on the font the config
+# asked for, kept between runs because a size you had to set twice is not a
+# setting.
+ZOOM_STATE = Path.home() / ".local" / "state" / "helm" / "zoom"
+ZOOM_STEP = 1.1
+ZOOM_MIN, ZOOM_MAX = 0.4, 5.0
+
 # The mark against each session, in the order the eye should find them: the
 # ones waiting on you first. Same vocabulary as the TUI, so a state means the
 # same thing in either front end.
@@ -94,6 +102,24 @@ def rgba(colour: str) -> Gdk.RGBA:
     return value
 
 
+def read_zoom() -> float:
+    """The zoom left over from last time, or 1.0 -- which is also what an
+    unreadable or nonsense file means. A font size is not worth an error."""
+    try:
+        zoom = float(ZOOM_STATE.read_text().strip())
+    except (OSError, ValueError):
+        return 1.0
+    return min(max(zoom, ZOOM_MIN), ZOOM_MAX)
+
+
+def save_zoom(zoom: float) -> None:
+    try:
+        ZOOM_STATE.parent.mkdir(parents=True, exist_ok=True)
+        ZOOM_STATE.write_text(f"{zoom:.3f}\n")
+    except OSError:
+        pass            # a size that does not survive a restart still works
+
+
 class Session(Gtk.Box):
     """One open session: a VTE terminal with the real thing running in it.
 
@@ -103,7 +129,8 @@ class Session(Gtk.Box):
     taking over a terminal.
     """
 
-    def __init__(self, host: str, name: str, palette, on_exit, screen=None):
+    def __init__(self, host: str, name: str, palette, on_exit, screen=None,
+                 font: str = "", zoom: float = 1.0):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.host = host
         self.name = name
@@ -118,7 +145,9 @@ class Session(Gtk.Box):
         self.term.set_hexpand(True)
         self.term.set_vexpand(True)
         self.term.set_scrollback_lines(10000)
-        self.term.set_font(Pango.FontDescription.from_string("monospace 11"))
+        self.term.set_font(Pango.FontDescription.from_string(
+            font or terminal_font()))
+        self.term.set_font_scale(zoom)
         self.term.set_colors(rgba(palette.foreground),
                              rgba(palette.background), None)
         self.term.set_mouse_autohide(True)
@@ -277,6 +306,10 @@ class Helm(Gtk.ApplicationWindow):
         self.set_default_size(1400, 860)
 
         self.palette = load_palette()
+        # The font the terminals beside this window are using, and how far off
+        # it you have zoomed. Both are read once; ctrl-+ changes the second.
+        self.font = terminal_font()
+        self.zoom = read_zoom()
         self.rows: dict[str, dict] = {}
         self.order: list[str] = []
         self.open: dict[tuple[str, str], Session] = {}
@@ -409,6 +442,7 @@ class Helm(Gtk.ApplicationWindow):
                 ("ctrl-shift-w", "close the view, leave the session running"),
                 ("ctrl-shift-k", "kill the selected session, for good"),
                 ("ctrl-f", "filter the list, esc clears it"),
+                ("ctrl-+ - 0", "text bigger, smaller, back to normal"),
                 ("F11 / ctrl-q", "fullscreen / quit")]
         for offset, (key, means) in enumerate(keys):
             row = len(marks) + offset + 1
@@ -850,6 +884,14 @@ class Helm(Gtk.ApplicationWindow):
             if name == "q":
                 self.close()
                 return True
+            # What every terminal binds. "equal" is the unshifted key the +
+            # is printed on, so ctrl-+ works without asking for shift too.
+            if name in ("plus", "equal", "kp_add"):
+                return self.zoom_by(ZOOM_STEP)
+            if name in ("minus", "kp_subtract"):
+                return self.zoom_by(1 / ZOOM_STEP)
+            if name in ("0", "kp_0"):
+                return self.set_zoom(1.0)
 
         if ctrl and shift:
             if name == "c":
@@ -864,6 +906,24 @@ class Helm(Gtk.ApplicationWindow):
                 return self.kill_selected()
 
         return False        # everything else belongs to the terminal
+
+    def zoom_by(self, factor: float) -> bool:
+        return self.set_zoom(self.zoom * factor)
+
+    def set_zoom(self, zoom: float) -> bool:
+        """Resize the text in every session, now and the ones opened later.
+
+        VTE scales the font it was given rather than being handed a new one,
+        so the family and the size out of the terminal config stay the thing
+        being adjusted -- zooming is not a second opinion about the font.
+        """
+        self.zoom = round(min(max(zoom, ZOOM_MIN), ZOOM_MAX), 3)
+        for session in self.open.values():
+            session.term.set_font_scale(self.zoom)
+        save_zoom(self.zoom)
+        # No message to go with it: the text changing size in front of you is
+        # the feedback, and the footer belongs to the host count.
+        return True
 
     def opened(self) -> list[Session]:
         """Open sessions in the order they were opened -- which is the order
@@ -1425,7 +1485,8 @@ class Helm(Gtk.ApplicationWindow):
             return
 
         session = Session(host, name, self.palette, self.close_session,
-                          screen=lambda h=host, n=name: self.screen_of(h, n))
+                          screen=lambda h=host, n=name: self.screen_of(h, n),
+                          font=self.font, zoom=self.zoom)
         self.open[key] = session
         self.stack.add_named(session, f"{host}/{name}")
         self.show(session)

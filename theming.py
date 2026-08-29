@@ -9,11 +9,17 @@ ANSI ones.
 Off Omarchy, or if that file is unreadable, fall back to COLORFGBG (which most
 terminals set) and then to a dark default. HELM_THEME=light|dark forces
 the choice either way.
+
+The terminal font is read the same way -- out of the config of the terminal
+this machine actually has -- so a session inside helm is the size the rest of
+your terminals are. HELM_FONT overrides it.
 """
 
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import tomllib
 from pathlib import Path
 
@@ -190,3 +196,104 @@ def load_palette() -> Palette:
     return Palette(FALLBACK_LIGHT if mode == "light" else FALLBACK_DARK,
                    f"built-in {mode}")
 
+
+# --------------------------------------------------------------------------
+# The font
+# --------------------------------------------------------------------------
+
+FALLBACK_FONT = "monospace 11"
+
+CONFIG = Path.home() / ".config"
+
+
+def _foot_font(path: Path) -> tuple[str, float] | None:
+    """font=JetBrainsMono Nerd Font:size=9 -- a comma-separated list, where
+    the ones after the first are only fallbacks for missing glyphs."""
+    for line in _lines(path):
+        if line.startswith("font="):
+            first = line.split("=", 1)[1].split(",")[0]
+            bits = first.split(":")
+            size = next((b.split("=")[1] for b in bits[1:]
+                         if b.startswith("size=")), "")
+            return bits[0].strip(), _number(size)
+    return None
+
+
+def _ghostty_font(path: Path) -> tuple[str, float] | None:
+    family, size = "", ""
+    for line in _lines(path):
+        key, _, value = line.partition("=")
+        if key.strip() == "font-family":
+            family = value.strip().strip('"')
+        elif key.strip() == "font-size":
+            size = value.strip()
+    return (family, _number(size)) if family else None
+
+
+def _kitty_font(path: Path) -> tuple[str, float] | None:
+    family, size = "", ""
+    for line in _lines(path):
+        if line.startswith("font_family "):
+            family = line[len("font_family "):].strip()
+        elif line.startswith("font_size "):
+            size = line[len("font_size "):].strip()
+    return (family, _number(size)) if family else None
+
+
+def _alacritty_font(path: Path) -> tuple[str, float] | None:
+    try:
+        with path.open("rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    font = data.get("font") or {}
+    family = (font.get("normal") or {}).get("family", "")
+    return (family, _number(str(font.get("size", "")))) if family else None
+
+
+# In order: the first one whose config is readable *and* whose binary is
+# installed wins. Reading the config of a terminal that is not on the machine
+# would be following someone else's setup.
+TERMINALS = (
+    ("foot", CONFIG / "foot" / "foot.ini", _foot_font),
+    ("ghostty", CONFIG / "ghostty" / "config", _ghostty_font),
+    ("alacritty", CONFIG / "alacritty" / "alacritty.toml", _alacritty_font),
+    ("kitty", CONFIG / "kitty" / "kitty.conf", _kitty_font),
+)
+
+
+def _lines(path: Path) -> list[str]:
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return []
+    return [line.strip() for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")]
+
+
+def _number(text: str) -> float:
+    match = re.search(r"\d+(?:\.\d+)?", text or "")
+    return float(match.group()) if match else 0.0
+
+
+def terminal_font(which=None) -> str:
+    """A Pango font string for the session terminals.
+
+    HELM_FONT wins ("JetBrainsMono Nerd Font 10"). Otherwise this machine's
+    terminal is asked what it uses, so helm matches the terminals beside it
+    rather than picking a size of its own. `which` is for the tests.
+    """
+    forced = os.environ.get("HELM_FONT", "").strip()
+    if forced:
+        return forced
+
+    for binary, path, parse in (which or TERMINALS):
+        if not path.exists() or not shutil.which(binary):
+            continue
+        found = parse(path)
+        if not found or not found[0]:
+            continue
+        family, size = found
+        return f"{family} {size:g}" if size else family
+
+    return FALLBACK_FONT
