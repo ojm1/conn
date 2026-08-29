@@ -61,6 +61,9 @@ WATCH_INTERVAL = 1.0     # how often the far side re-dumps a screen
 WATCH_RETRY_MIN = 3.0
 WATCH_RETRY_MAX = 300.0
 WATCH_HEALTHY = 30.0     # a stream that lasted this long was not a refusal
+# How long an unsent draft has to sit untouched before it is worth saying out
+# loud. Typing is a draft too -- see draft_settled().
+DRAFT_DWELL = 120.0
 
 # The mark against each session, in the order the eye should find them: the
 # ones waiting on you first. Same vocabulary as the TUI, so a state means the
@@ -288,6 +291,9 @@ class Helm(Gtk.ApplicationWindow):
         # sending when this changes to one of the states that means you, and
         # never for a state that was already true when helm started.
         self.was: dict[tuple[str, str], str] = {}
+        # Per session, the draft last seen in its box, when it stopped
+        # changing, and whether that one has been announced already.
+        self.drafts: dict[tuple[str, str], tuple[str, float, bool]] = {}
         self.shape: list = []
         self.widgets: dict[tuple[str, str], dict] = {}
         self.watched: set[str] = set()
@@ -1189,17 +1195,28 @@ class Helm(Gtk.ApplicationWindow):
 
         The first sweep only records: everything already waiting when helm
         opens is on screen, and five notifications for it would be noise.
+
+        A blocked chat is worth saying the moment it happens. A draft is not,
+        which is what draft_settled() is for.
         """
         first = not self.was
+        now = time.monotonic()
         for host in self.order:
             for session in self.rows[host]["sessions"]:
                 key = (host, session["name"])
                 state = session["agent"]["state"]
                 before = self.was.get(key)
                 self.was[key] = state
-                if first or before is None or before == state:
+                fresh = first or before is None
+
+                if state == agent_state.DRAFT:
+                    if self.draft_settled(key, session["agent"]["detail"],
+                                          now, silent=fresh):
+                        self.notify(host, session)
                     continue
-                if state not in (agent_state.NEEDS_YOU, agent_state.DRAFT):
+
+                self.drafts.pop(key, None)
+                if fresh or before == state or state != agent_state.NEEDS_YOU:
                     continue
                 self.notify(host, session)
 
@@ -1207,6 +1224,30 @@ class Helm(Gtk.ApplicationWindow):
                      if k not in {(h, s["name"]) for h in self.order
                                   for s in self.rows[h]["sessions"]}]:
             del self.was[gone]
+            self.drafts.pop(gone, None)
+
+    def draft_settled(self, key: tuple[str, str], text: str, now: float,
+                      silent: bool) -> bool:
+        """Whether an unsent draft has sat untouched long enough to be worth
+        interrupting for -- and only the first time it has.
+
+        Typing is a draft too. The box holds text from the first keystroke on,
+        so announcing the state itself fired a notification at whoever was at
+        the keyboard, about the sentence they were in the middle of. What
+        separates the draft worth knowing about is that it stops changing:
+        every edit puts the clock back to the start, and the toast is for the
+        one that then just sits there.
+
+        Only the first 60 characters of the box reach here, so a draft still
+        being typed past that mark can look settled. Two minutes is a long
+        time to spend on one sentence, and one toast is the whole cost.
+        """
+        seen, since, told = self.drafts.get(key, (None, now, silent))
+        if text != seen:
+            seen, since, told = text, now, silent
+        settled = not told and now - since >= DRAFT_DWELL
+        self.drafts[key] = (text, since, told or settled)
+        return settled
 
     def notify(self, host: str, session: dict) -> None:
         note = Gio.Notification.new(f"{host}/{session['name']}")

@@ -155,8 +155,14 @@ column is blank rather than promising a key that does not exist.
 
 The panel is honest about who is waiting on you, but only to someone looking at it -- and the thing
 worth knowing is exactly that a chat has been sitting there while you did something else. So it
-says so: a desktop notification on the edge into **needs you** or **unsent draft**, once, and not
-again until the session has been something else in between. Clicking it opens that session.
+says so: a desktop notification, once, and not again until the session has been something else in
+between. Clicking it opens that session.
+
+**Needs you** is announced the moment it happens -- nothing moves in that chat until you answer.
+**An unsent draft is not**, because typing is a draft too: the box holds text from the first
+keystroke, so announcing the state itself interrupted whoever was at the keyboard, about the
+sentence they were in the middle of. A draft is announced once it has sat **unchanged for two
+minutes**; every edit puts the clock back to the start.
 
 States that were already true when helm started are on screen already, and are not announced.
 

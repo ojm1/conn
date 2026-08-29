@@ -160,11 +160,36 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     check("no notification while the state stands", not sent)
     session["agent"] = dict(session["agent"], state=agent_state.READY, label="idle")
     window.render()
-    session["agent"] = dict(session["agent"], state=agent_state.DRAFT,
-                            label="unsent draft")
+    session["agent"] = dict(session["agent"], state=agent_state.NEEDS_YOU,
+                            label="needs you", detail="Do you want to")
     window.render()
     check("one when it starts waiting on you again",
+          [s[2] for s in sent] == [agent_state.NEEDS_YOU], f"sent={sent}")
+
+    # A draft is text you are in the middle of typing until it stops changing,
+    # so it is announced on the silence, not on the first keystroke.
+    sent.clear()
+    session["agent"] = dict(session["agent"], state=agent_state.DRAFT,
+                            label="unsent draft", detail="what's the health")
+    window.render()
+    check("typing is not an interruption", not sent, f"sent={sent}")
+
+    def rewind(by=gui.DRAFT_DWELL + 1):
+        text, since, told = window.drafts[alpha]
+        window.drafts[alpha] = (text, since - by, told)
+
+    session["agent"] = dict(session["agent"], detail="what's the health check")
+    rewind()
+    window.render()
+    check("and an edit puts the clock back", not sent, f"sent={sent}")
+
+    rewind()
+    window.render()
+    check("a draft left sitting is worth saying",
           [s[2] for s in sent] == [agent_state.DRAFT], f"sent={sent}")
+    rewind()
+    window.render()
+    check("but only the once", len(sent) == 1, f"sent={sent}")
 
     # -- filter ------------------------------------------------------------
     window.filter.set_text(SESSIONS[0])
