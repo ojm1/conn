@@ -272,6 +272,45 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
              if isinstance(c, Gtk.Button) and c.has_css_class("kill")]
     check("each session carries its own kill", len(kills) == 1)
 
+    # -- noticing it has been replaced on disk ------------------------------
+    window.check_source()
+    check("no restart nag while this is the installed version",
+          not window.updated.get_visible())
+    window.stamp -= 10                     # as if a newer copy had landed
+    window.check_source()
+    check("and one as soon as a newer one is copied over it",
+          window.updated.get_visible(),
+          "three times running, a feature was missing only because the "
+          "window was still the build from yesterday")
+    window.stamp = gui.source_stamp()
+    window.check_source()
+
+    # -- the menus, which is where most of this is actually reached --------
+    def menu_items(build, *args):
+        """What a right-click offers. The popover is parented to the list, so
+        it is still there to read after the call returns."""
+        build(*args)
+        popover = [c for c in walk(window.list) if isinstance(c, Gtk.Popover)]
+        labels = [b.get_label() for b in walk(popover[-1])
+                  if isinstance(b, Gtk.Button)] if popover else []
+        for pop in popover:
+            pop.popdown()
+        return labels
+
+    on_session = menu_items(window.row_menu, row_for(window, alpha), 0, 0)
+    check("right-clicking a session offers to rename it",
+          any("Rename" in (label or "") for label in on_session),
+          f"menu={on_session}")
+    check("as well as open and kill",
+          any("Open" in (label or "") for label in on_session)
+          and any("Kill" in (label or "") for label in on_session),
+          f"menu={on_session}")
+    on_host = menu_items(window.host_menu, row_for(window, alpha), "local", 0, 0)
+    check("and a host offers a new session and its passwords",
+          any("New session" in (label or "") for label in on_host)
+          and any("Passwords" in (label or "") for label in on_host),
+          f"menu={on_host}")
+
     # -- renaming, which must not disturb what is running ------------------
     renamed = hosts.rename_session("local", alpha[1], alpha[1] + "-renamed")
     check("a session can be renamed", renamed == alpha[1] + "-renamed",

@@ -180,6 +180,14 @@ minutes**; every edit puts the clock back to the start.
 
 States that were already true when helm started are on screen already, and are not announced.
 
+## When it has been replaced underneath it
+
+`cp *.py ~/.local/share/helm/app/` does not touch the window already running: it goes on running
+the code it started with, and a feature added an hour ago is simply not there. So the footer says
+**restart to update** once the files on disk are newer than the ones in memory, and clicking it
+replaces the process with the installed one. The sessions are tmux and outlive it -- the views
+close and come straight back.
+
 ## The one password
 
 helm never sees it. Your ssh key is unlocked once -- by the desktop keyring at login -- and every

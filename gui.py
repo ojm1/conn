@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import queue
 import random
+import sys
 import threading
 import time
 from pathlib import Path
@@ -70,6 +71,11 @@ DRAFT_DWELL = 120.0
 # asked for, kept between runs because a size you had to set twice is not a
 # setting.
 ZOOM_STATE = Path.home() / ".local" / "state" / "helm" / "zoom"
+
+# Where this copy of helm is running from, so it can notice when a newer one
+# has been installed underneath it. Sessions live in tmux, so restarting costs
+# nothing -- but only if you know there is a reason to.
+APP_DIR = Path(__file__).resolve().parent
 ZOOM_STEP = 1.1
 ZOOM_MIN, ZOOM_MAX = 0.4, 5.0
 
@@ -100,6 +106,14 @@ def rgba(colour: str) -> Gdk.RGBA:
     value = Gdk.RGBA()
     value.parse(colour)
     return value
+
+
+def source_stamp() -> float:
+    """The newest mtime among the files this app is made of."""
+    try:
+        return max(path.stat().st_mtime for path in APP_DIR.glob("*.py"))
+    except (OSError, ValueError):
+        return 0.0
 
 
 def read_zoom() -> float:
@@ -310,6 +324,9 @@ class Helm(Gtk.ApplicationWindow):
         # it you have zoomed. Both are read once; ctrl-+ changes the second.
         self.font = terminal_font()
         self.zoom = read_zoom()
+        # What was on disk when this process started. Anything newer than it
+        # is a version nobody is running yet.
+        self.stamp = source_stamp()
         self.rows: dict[str, dict] = {}
         self.order: list[str] = []
         self.open: dict[tuple[str, str], Session] = {}
@@ -1160,6 +1177,18 @@ class Helm(Gtk.ApplicationWindow):
         self.footnote.set_hexpand(True)
         bar.append(self.footnote)
 
+        # Shown only once a newer helm has been copied over this one. There
+        # is no other sign: the window goes on running the code it started
+        # with, and a feature added an hour ago is simply absent.
+        self.updated = Gtk.Button(label="restart to update")
+        self.updated.add_css_class("locked")
+        self.updated.set_tooltip_text(
+            "A newer helm is installed. Restarting reloads it -- the sessions "
+            "are tmux and survive it; the views close and reopen.")
+        self.updated.set_visible(False)
+        self.updated.connect("clicked", lambda _b: self.restart())
+        bar.append(self.updated)
+
         # Shown only when there is nothing to unlock it with. A padlock that
         # is always there stops being read.
         self.unlock = Gtk.Button(label="unlock key")
@@ -1623,7 +1652,20 @@ class Helm(Gtk.ApplicationWindow):
         self.check_agent()
         return GLib.SOURCE_CONTINUE
 
+    def restart(self) -> None:
+        """Become the version that is installed now.
+
+        The sessions are tmux and outlive this process, which is what makes
+        replacing it in place reasonable rather than alarming: the views close
+        and come back, and nothing running in them notices.
+        """
+        os.execv(sys.executable, [sys.executable, str(APP_DIR / "main.py")])
+
+    def check_source(self) -> None:
+        self.updated.set_visible(source_stamp() > self.stamp)
+
     def sweep(self) -> None:
+        self.check_source()
         for host in self.order:
             if host in self.inflight:
                 continue
