@@ -152,7 +152,8 @@ who wrote it.
 | right-click in a session | Copy, paste, and every link on the screen -- including ones tmux wrapped |
 | hover a session | A bin appears: kill it, asked first -- there is no undo |
 | `ctrl-shift-k` | Kill the selected session |
-| right-click a row | The same, as a menu -- on a host too, for new session and its passwords |
+| `ctrl-shift-r` | Rename it -- local or remote, nothing running in it is interrupted |
+| right-click a row | Open, rename, kill -- and on a host, new session, files and its passwords |
 | `+` | New session on the selected host, local or remote |
 | server icon | Add a server to `~/.ssh/config` |
 | `F1` or `?` | The guide: what the marks mean, every key, and who wrote it |

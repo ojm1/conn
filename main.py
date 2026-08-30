@@ -18,6 +18,7 @@ Inside the window:
   ctrl-tab       next open session (ctrl-shift-tab for the last)
   F12            back to the list      F11  fullscreen
   ctrl-shift-w   close the view        ctrl-shift-k  kill the session
+  ctrl-shift-r   rename the session
   ctrl-shift-c/v copy / paste          ctrl-f        filter
   ctrl-+ - 0     text bigger, smaller, back to the terminal's own size
   ctrl-q         quit

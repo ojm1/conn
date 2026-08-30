@@ -220,7 +220,7 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     # as the whole set, and the ones left out are the ones nobody finds.
     for wanted in ("alt-1..9", "ctrl-tab", "f12", "ctrl-shift-c / v",
                    "ctrl-shift-a", "ctrl-shift-w", "ctrl-shift-k", "ctrl-f",
-                   "ctrl-+ - 0", "f11 / ctrl-q", "f1 or ?",
+                   "ctrl-+ - 0", "ctrl-shift-r", "f11 / ctrl-q", "f1 or ?",
                    "ctrl-click", "right-click a session", "right-click a host",
                    "right-click the screen", "hover a session"):
         check(f"the guide has {wanted}", wanted in guide,
@@ -271,6 +271,31 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     kills = [c for c in walk(row_for(window, alpha))
              if isinstance(c, Gtk.Button) and c.has_css_class("kill")]
     check("each session carries its own kill", len(kills) == 1)
+
+    # -- renaming, which must not disturb what is running ------------------
+    renamed = hosts.rename_session("local", alpha[1], alpha[1] + "-renamed")
+    check("a session can be renamed", renamed == alpha[1] + "-renamed",
+          f"got={renamed}")
+    check("and tmux agrees", renamed in sessions_now(), f"left={sessions_now()}")
+    was_open = window.open.get(alpha)
+    window.renamed("local", alpha[1], renamed)
+    check("the open view follows it",
+          ("local", renamed) in window.open and alpha not in window.open,
+          f"open={list(window.open)}")
+    check("and it is the same terminal, not a new one",
+          was_open is not None and window.open[("local", renamed)] is was_open)
+    check("which now knows its own name",
+          window.open[("local", renamed)].name == renamed)
+    check("a name tmux cannot take is filtered, not refused",
+          hosts.SESSION_NAME.sub("_", "two words.here") == "two_words_here")
+    taken = None
+    try:
+        hosts.rename_session("local", renamed, beta[1])
+    except hosts.HostError as exc:
+        taken = str(exc)
+    check("a name already in use comes back as tmux said it",
+          taken and "duplicate" in taken, f"error={taken}")
+    alpha = ("local", renamed)
 
     hosts.kill_session(*alpha)
     left = sessions_now()

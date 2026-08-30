@@ -817,6 +817,41 @@ def kill_session(host: str, session: str) -> None:
         raise HostError(message.splitlines()[-1] if message else "kill failed")
 
 
+SESSION_NAME = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def rename_session(host: str, session: str, wanted: str) -> str:
+    """Rename a tmux session, here or on a server. Returns the name it got.
+
+    Nothing is interrupted: tmux renames the session out from under whatever
+    is running in it, and a terminal already attached stays attached. The
+    label in tmux's own status bar is rewritten to match, because it was
+    stamped with the old name at attach time and would otherwise go on
+    claiming to be a session that no longer exists.
+
+    The name is filtered the way connect_argv filters one, for the same
+    reason: it is interpolated into a shell script, and a session name that
+    needs quoting is a mistake rather than a thing to support.
+    """
+    name = SESSION_NAME.sub("_", wanted.strip())
+    if not name:
+        raise HostError("a session needs a name")
+    if name == session:
+        return name
+
+    label = f"[{host}/{name}] "
+    script = (f"tmux rename-session -t {shlex.quote(session)} {shlex.quote(name)}"
+              f" && tmux set-option -t {shlex.quote(name)} status-left "
+              f"{shlex.quote(label)}")
+    done = subprocess.run(run_argv(host, script), stdin=subprocess.DEVNULL,
+                          capture_output=True, timeout=20)
+    if done.returncode != 0:
+        message = (done.stderr or b"").decode(errors="replace").strip()
+        raise HostError(message.splitlines()[-1] if message
+                        else "rename failed")
+    return name
+
+
 def copy_key(host: str) -> None:
     """ssh-copy-id needs a password typed, so it gets a real terminal window
     rather than being run headless behind the panel."""

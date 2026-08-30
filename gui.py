@@ -448,13 +448,14 @@ class Helm(Gtk.ApplicationWindow):
             ("ctrl-shift-a", "select everything on the screen"),
             ("ctrl-shift-w", "close the view, leave the session running"),
             ("ctrl-shift-k", "kill the selected session, for good"),
+            ("ctrl-shift-r", "rename it -- nothing in it is interrupted"),
             ("ctrl-f", "filter the list, esc clears it"),
             ("ctrl-+ - 0", "text bigger, smaller, back to your terminal's size"),
             ("F11 / ctrl-q", "fullscreen / quit"),
             ("F1 or ?", "this guide"),
             ("mouse", ""),
             ("ctrl-click", "open a link in a session"),
-            ("right-click a session", "open it, or kill it"),
+            ("right-click a session", "open it, rename it, or kill it"),
             ("right-click a host", "new session, files over sshfs, its passwords"),
             ("right-click the screen", "copy, paste, and every link on it"),
             ("hover a session", "the bin at the end of the row kills it"),
@@ -549,6 +550,7 @@ class Helm(Gtk.ApplicationWindow):
 
         self.popup(row, x, y, [
             ("Open", lambda: self.open_session(host, name), False),
+            ("Rename...", lambda: self.prompt_rename(host, name), False),
             (f"Kill {host}/{name}...",
              lambda: self.confirm_kill(host, name), True),
         ])
@@ -808,6 +810,42 @@ class Helm(Gtk.ApplicationWindow):
         self.ask(f"New session on {host}", [("Name", "shell")],
                  lambda values: self.open_session(host, values["Name"]))
 
+    def prompt_rename(self, host: str, name: str) -> None:
+        """Sessions get named once, when they are made, and "shell" is what
+        three of them end up called. Renaming one costs a tmux command."""
+        self.ask(f"Rename {host}/{name}", [("Name", name)],
+                 lambda values: threading.Thread(
+                     target=self._rename, args=(host, name, values["Name"]),
+                     daemon=True).start())
+
+    def _rename(self, host: str, name: str, wanted: str) -> None:
+        try:
+            now = hosts.rename_session(host, name, wanted)
+        except (hosts.HostError, OSError) as exc:
+            GLib.idle_add(self.complain, f"{host}/{name}", str(exc))
+            return
+        GLib.idle_add(self.renamed, host, name, now)
+
+    def renamed(self, host: str, was: str, now: str) -> bool:
+        """Follow the session that has just been renamed.
+
+        A session open in the window is still the same terminal on the same
+        pty -- nothing about it is stale except the name helm files it under,
+        and losing track of that would leave the view open with no row and no
+        key to close it by.
+        """
+        session = self.open.pop((host, was), None)
+        if session is not None:
+            session.name = now
+            self.open[(host, now)] = session
+        # The old key would otherwise sit in the notification memory as a
+        # session that has gone quiet, and the new one arrives as first seen,
+        # which is right: a rename is not a chat that started needing you.
+        self.was.pop((host, was), None)
+        self.drafts.pop((host, was), None)
+        self.sweep()
+        return GLib.SOURCE_REMOVE
+
     def prompt_add_host(self) -> None:
         def add(values):
             try:
@@ -947,6 +985,8 @@ class Helm(Gtk.ApplicationWindow):
                 return self.close_visible()
             if name == "k":
                 return self.kill_selected()
+            if name == "r":
+                return self.rename_selected()
 
         return False        # everything else belongs to the terminal
 
@@ -1018,6 +1058,12 @@ class Helm(Gtk.ApplicationWindow):
         key = self.selected_key()
         if key:
             self.confirm_kill(*key)
+        return True
+
+    def rename_selected(self) -> bool:
+        key = self.selected_key()
+        if key:
+            self.prompt_rename(*key)
         return True
 
     def toggle_fullscreen(self) -> bool:
