@@ -146,6 +146,7 @@ who wrote it.
 | `F11` | Fullscreen, and back |
 | `ctrl-q` | Quit |
 | `ctrl-shift-c` / `ctrl-shift-v` | Copy / paste. Plain `ctrl-c` stays the interrupt |
+| `ctrl-shift-s` | Copy the whole screen -- no selection needed |
 | `ctrl-+` / `ctrl--` / `ctrl-0` | Text bigger, smaller, back to the terminal's own size |
 | `ctrl-shift-a` | Select everything on the screen |
 | `ctrl-click` a URL | Open it |
@@ -185,8 +186,12 @@ States that were already true when helm started are on screen already, and are n
 Claude Code and opencode both turn on mouse reporting, which means the drag never reaches the
 terminal -- the agent gets it. **Hold shift while dragging** and VTE takes the mouse back; that
 override is hardcoded in VTE and there is no setting that turns an application's mouse reporting
-off. With nothing selected, copy is a no-op, so the right-click menu says as much rather than
-appearing to work, and offers **Copy the whole screen**, which needs no selection at all.
+off. With nothing selected, copy is a no-op, so the footer says **nothing selected -- hold shift
+while you drag** rather than leaving you to wonder whether the key is bound. A copy that works says
+so too, with the number of characters, because the alternative is finding out at the other end.
+
+`ctrl-shift-s` copies the **whole screen** and needs no selection at all -- helm already holds that
+text, it is the same capture the state is read from.
 
 ## When it has been replaced underneath it
 

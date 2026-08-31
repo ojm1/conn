@@ -301,9 +301,26 @@ class Session(Gtk.Box):
     def to_clipboard(text: str) -> None:
         Gdk.Display.get_default().get_clipboard().set(text)
 
-    def copy(self) -> None:
+    def copy(self) -> int:
+        """Put the selection on the clipboard. Returns how much that was.
+
+        The text is asked for directly rather than trusting
+        get_has_selection() and handing the job to VTE: this way there is
+        something to report -- a count, or the fact that there was nothing --
+        and a key that quietly did nothing stops being indistinguishable from
+        a key that is not bound.
+        """
+        try:
+            text = self.term.get_text_selected(Vte.Format.TEXT) or ""
+        except (AttributeError, TypeError):      # older VTE
+            text = ""
+        if text:
+            self.to_clipboard(text)
+            return len(text)
         if self.term.get_has_selection():
             self.term.copy_clipboard_format(Vte.Format.TEXT)
+            return -1                            # copied, size unknown
+        return 0
 
     def paste(self) -> None:
         self.term.paste_clipboard()
@@ -335,6 +352,8 @@ class Helm(Gtk.ApplicationWindow):
         # What was on disk when this process started. Anything newer than it
         # is a version nobody is running yet.
         self.stamp = source_stamp()
+        # A footer message and when it stops being worth showing.
+        self.said: tuple[str, float] = ("", 0.0)
         self.rows: dict[str, dict] = {}
         self.order: list[str] = []
         self.open: dict[tuple[str, str], Session] = {}
@@ -470,6 +489,7 @@ class Helm(Gtk.ApplicationWindow):
             ("ctrl-tab", "next open session -- add shift to go back"),
             ("F12", "back to the list; arrows move, enter opens"),
             ("ctrl-shift-c / v", "copy / paste -- shift-drag to select first"),
+            ("ctrl-shift-s", "copy the whole screen, no selecting needed"),
             ("ctrl-shift-a", "select everything on the screen"),
             ("ctrl-shift-w", "close the view, leave the session running"),
             ("ctrl-shift-k", "kill the selected session, for good"),
@@ -1012,6 +1032,8 @@ class Helm(Gtk.ApplicationWindow):
                 return self.kill_selected()
             if name == "r":
                 return self.rename_selected()
+            if name == "s":
+                return self.copy_screen()
 
         return False        # everything else belongs to the terminal
 
@@ -1069,12 +1091,42 @@ class Helm(Gtk.ApplicationWindow):
     def on_terminal(self, action: str) -> bool:
         """Run one of the terminal's own actions on whichever is showing."""
         current = self.stack.get_visible_child()
-        if isinstance(current, Session):
-            if action == "select_all":
-                current.term.select_all()
-            else:
-                getattr(current, action)()
+        if not isinstance(current, Session):
+            return True
+        if action == "select_all":
+            current.term.select_all()
+            return True
+        if action == "copy":
+            size = current.copy()
+            self.notice(f"copied {size} characters" if size > 0
+                        else "copied" if size < 0
+                        else "nothing selected -- hold shift while you drag")
+            return True
+        getattr(current, action)()
         return True
+
+    def copy_screen(self) -> bool:
+        """The whole visible screen, no selection needed -- which is the point
+        of it, since an agent with mouse reporting on takes the drag."""
+        current = self.stack.get_visible_child()
+        if not isinstance(current, Session):
+            return True
+        text = current.screen()
+        Session.to_clipboard(text)
+        self.notice(f"copied the screen -- {len(text)} characters"
+                    if text else "no screen to copy yet")
+        return True
+
+    def notice(self, text: str) -> None:
+        """Say something in the footer for a few seconds.
+
+        The footer is rewritten on every frame, so a message has to be told to
+        outlast that; render() reads this. It exists because copy is silent
+        either way, and "did that work?" is not a question the window should
+        leave you holding.
+        """
+        self.said = (text, time.monotonic() + 4.0)
+        self.footnote.set_text(text)
 
     def kill_selected(self) -> bool:
         """Kill whatever the list is pointing at. Not bound to Delete: this
@@ -1349,8 +1401,12 @@ class Helm(Gtk.ApplicationWindow):
         else:
             self.subtitle.remove_css_class("waiting")
         live = sum(1 for host in self.order if self.rows[host]["state"] == "up")
-        self.footnote.set_text(
-            f"{live}/{len(self.order)} hosts  ·  {len(slots)} sessions")
+        said, until = self.said
+        if time.monotonic() < until:
+            self.footnote.set_text(said)     # a message that has not had its
+        else:                                # few seconds yet outranks a count
+            self.footnote.set_text(
+                f"{live}/{len(self.order)} hosts  ·  {len(slots)} sessions")
 
         self.announce()
 

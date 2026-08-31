@@ -220,7 +220,8 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     # as the whole set, and the ones left out are the ones nobody finds.
     for wanted in ("alt-1..9", "ctrl-tab", "f12", "ctrl-shift-c / v",
                    "ctrl-shift-a", "ctrl-shift-w", "ctrl-shift-k", "ctrl-f",
-                   "ctrl-+ - 0", "ctrl-shift-r", "f11 / ctrl-q", "f1 or ?",
+                   "ctrl-+ - 0", "ctrl-shift-r", "ctrl-shift-s",
+                   "f11 / ctrl-q", "f1 or ?",
                    "ctrl-click", "right-click a session", "right-click a host",
                    "right-click the screen", "hover a session"):
         check(f"the guide has {wanted}", wanted in guide,
@@ -289,6 +290,22 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     check("and the whole screen can be taken without selecting at all",
           any("whole screen" in (label or "") for label in copy_labels),
           f"menu={copy_labels}")
+
+    window.show(session_view)
+    session_view.term.unselect_all()
+    window.on_terminal("copy")
+    check("copying nothing says so, rather than looking like a dead key",
+          "nothing selected" in window.footnote.get_text(),
+          f"footer={window.footnote.get_text()!r}")
+    window.copy_screen()
+    check("and copying the screen reports what it took",
+          "screen" in window.footnote.get_text(),
+          f"footer={window.footnote.get_text()!r}")
+    window.said = ("", 0.0)
+    window.render()
+    check("the footer goes back to the host count afterwards",
+          "hosts" in window.footnote.get_text(),
+          f"footer={window.footnote.get_text()!r}")
 
     # -- noticing it has been replaced on disk ------------------------------
     window.check_source()
