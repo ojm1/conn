@@ -272,6 +272,24 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
              if isinstance(c, Gtk.Button) and c.has_css_class("kill")]
     check("each session carries its own kill", len(kills) == 1)
 
+    # -- copying out of a session that has the mouse ------------------------
+    session_view = window.open[beta] if beta in window.open else None
+    if session_view is None:
+        window.open_session(*beta)
+        session_view = window.open[beta]
+    session_view.menu(0.0, 0.0)
+    menu = [c for c in walk(session_view.term) if isinstance(c, Gtk.Popover)]
+    copy_labels = [b.get_label() for b in walk(menu[-1])
+                   if isinstance(b, Gtk.Button)] if menu else []
+    for pop in menu:
+        pop.popdown()
+    check("with nothing selected, copy says how to select",
+          any("hold shift" in (label or "") for label in copy_labels),
+          f"menu={copy_labels}")
+    check("and the whole screen can be taken without selecting at all",
+          any("whole screen" in (label or "") for label in copy_labels),
+          f"menu={copy_labels}")
+
     # -- noticing it has been replaced on disk ------------------------------
     window.check_source()
     check("no restart nag while this is the installed version",

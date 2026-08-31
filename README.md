@@ -149,7 +149,7 @@ who wrote it.
 | `ctrl-+` / `ctrl--` / `ctrl-0` | Text bigger, smaller, back to the terminal's own size |
 | `ctrl-shift-a` | Select everything on the screen |
 | `ctrl-click` a URL | Open it |
-| right-click in a session | Copy, paste, and every link on the screen -- including ones tmux wrapped |
+| right-click in a session | Copy, paste, the whole screen, and every link on it -- including ones tmux wrapped |
 | hover a session | A bin appears: kill it, asked first -- there is no undo |
 | `ctrl-shift-k` | Kill the selected session |
 | `ctrl-shift-r` | Rename it -- local or remote, nothing running in it is interrupted |
@@ -179,6 +179,14 @@ sentence they were in the middle of. A draft is announced once it has sat **unch
 minutes**; every edit puts the clock back to the start.
 
 States that were already true when helm started are on screen already, and are not announced.
+
+### Selecting text an agent is sitting on
+
+Claude Code and opencode both turn on mouse reporting, which means the drag never reaches the
+terminal -- the agent gets it. **Hold shift while dragging** and VTE takes the mouse back; that
+override is hardcoded in VTE and there is no setting that turns an application's mouse reporting
+off. With nothing selected, copy is a no-op, so the right-click menu says as much rather than
+appearing to work, and offers **Copy the whole screen**, which needs no selection at all.
 
 ## When it has been replaced underneath it
 

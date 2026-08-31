@@ -283,7 +283,15 @@ class Session(Gtk.Box):
             item(f"Open {shown}",
                  lambda u=link: Gtk.UriLauncher(uri=u).launch(None, None, None, None))
             item(f"Copy {shown}", lambda u=link: self.to_clipboard(u))
-        item("Copy", self.copy, self.term.get_has_selection())
+        # An agent with mouse reporting on takes the drag before the terminal
+        # sees it, so there is often nothing selected and no way to tell why.
+        # VTE's own answer is shift, and it is hardcoded -- so the menu says
+        # so, and offers the whole screen for when you just want the text.
+        if self.term.get_has_selection():
+            item("Copy", self.copy)
+        else:
+            item("Copy -- hold shift to select", self.copy, False)
+        item("Copy the whole screen", lambda: self.to_clipboard(self.screen()))
         item("Paste", self.paste)
         item("Select all", self.term.select_all)
         popover.set_child(box)
@@ -461,7 +469,7 @@ class Helm(Gtk.ApplicationWindow):
             ("alt-1..9", "open the session with that number"),
             ("ctrl-tab", "next open session -- add shift to go back"),
             ("F12", "back to the list; arrows move, enter opens"),
-            ("ctrl-shift-c / v", "copy / paste -- plain ctrl-c is the interrupt"),
+            ("ctrl-shift-c / v", "copy / paste -- shift-drag to select first"),
             ("ctrl-shift-a", "select everything on the screen"),
             ("ctrl-shift-w", "close the view, leave the session running"),
             ("ctrl-shift-k", "kill the selected session, for good"),
