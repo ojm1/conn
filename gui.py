@@ -383,7 +383,11 @@ class Helm(Gtk.ApplicationWindow):
         self._style()
         self._shortcuts()
 
-        self.load_hosts()
+        # The ssh is held back until check_agent() says there is a key to
+        # ride, so a fresh boot does not put up one passphrase prompt per
+        # connection. See connect_hosts().
+        self.holding = True
+        self.load_hosts(connect=False)
         self.check_agent()
         GLib.timeout_add_seconds(REFRESH_SECONDS, self.sweep_tick)
         # The stream can speak several times a second on a busy host. Draining
@@ -501,7 +505,7 @@ class Helm(Gtk.ApplicationWindow):
             ("mouse", ""),
             ("ctrl-click", "open a link in a session"),
             ("right-click a session", "open it, rename it, or kill it"),
-            ("right-click a host", "new session, files over sshfs, its passwords"),
+            ("right-click a host", "check it again, new session, files, passwords"),
             ("right-click the screen", "copy, paste, and every link on it"),
             ("hover a session", "the bin at the end of the row kills it"),
             ("+ / server icon", "new session here / add a host to ~/.ssh/config"),
@@ -601,7 +605,8 @@ class Helm(Gtk.ApplicationWindow):
         ])
 
     def host_menu(self, row, host: str, x: float, y: float) -> None:
-        items = [("New session...", lambda: self.prompt_new_session(host), False),
+        items = [("Check again", lambda: self.recheck(host), False),
+                 ("New session...", lambda: self.prompt_new_session(host), False),
                  ("Passwords and keys...", lambda: self.show_secrets(host), False)]
         if hosts.is_local(host):
             items.append((f"Open {hosts.files_label(host)}",
@@ -618,6 +623,26 @@ class Helm(Gtk.ApplicationWindow):
             items.append(("Install my key (ssh-copy-id)",
                           lambda: self.install_key(host), False))
         self.popup(row, x, y, items)
+
+    def recheck(self, host: str) -> None:
+        """Probe one host now.
+
+        The sweep already comes back to a down host every 45 seconds, but
+        silently, so a box you have just fixed looks stuck until it happens.
+        This is the same probe on demand, and the row says "checking" while
+        it runs so the answer is visibly being fetched.
+        """
+        if host in self.inflight:
+            return
+        row = self.rows.get(host)
+        if row is not None:
+            row["state"] = "unknown"
+            row["error"] = ""
+        self.notice(f"checking {host}...")
+        self.render()
+        self.inflight.add(host)
+        threading.Thread(target=self._probe, args=(host,),
+                         name=f"probe-{host}", daemon=True).start()
 
     def do_mount(self, host: str, mount: bool) -> None:
         """sshfs on a worker: fusermount blocks for seconds on a busy mount,
@@ -1272,9 +1297,19 @@ class Helm(Gtk.ApplicationWindow):
 
     def do_unlock(self) -> None:
         hosts.unlock_agent()
-        # The terminal outlives this call, so the state is re-read shortly
-        # after rather than now, when it would still say locked.
-        GLib.timeout_add_seconds(6, lambda: (self.check_agent(), False)[1])
+        # The terminal outlives this call, so the state is re-read after it
+        # rather than now, when it would still say locked. Polled rather than
+        # read once: the hosts stay held until the key lands, and how long
+        # you take to type it is not something to guess at.
+        self.polls = 20
+        GLib.timeout_add_seconds(3, self.poll_unlock)
+
+    def poll_unlock(self) -> bool:
+        self.check_agent()
+        self.polls -= 1
+        if self.polls > 0 and self.holding:
+            return GLib.SOURCE_CONTINUE
+        return GLib.SOURCE_REMOVE
 
     def check_agent(self) -> None:
         def look():
@@ -1291,6 +1326,13 @@ class Helm(Gtk.ApplicationWindow):
         if locked:
             self.unlock.set_label(
                 "no ssh agent" if keys is None else "unlock key")
+            if self.holding:
+                self.notice("ssh agent holds no key -- unlock it, or "
+                            "refresh to connect anyway")
+        elif self.holding:
+            # The one moment when fanning out is free: every ssh below rides
+            # the agent and none of them stops to ask for anything.
+            self.connect_hosts()
         return GLib.SOURCE_REMOVE
 
     def _style(self) -> None:
@@ -1354,7 +1396,7 @@ class Helm(Gtk.ApplicationWindow):
 
     # -- the list ----------------------------------------------------------
 
-    def load_hosts(self) -> None:
+    def load_hosts(self, connect: bool = True) -> None:
         self.order = hosts.list_hosts()
         for host in self.order:
             self.rows.setdefault(host, hosts.blank(host))
@@ -1362,6 +1404,25 @@ class Helm(Gtk.ApplicationWindow):
             del self.rows[gone]
 
         self.render()
+        if connect:
+            self.connect_hosts()
+
+    def connect_hosts(self) -> None:
+        """Open the ssh: a watch stream per host, and a probe of each.
+
+        That is two connections a host going off at the same instant, and on
+        a fresh boot none of them can ride another's ControlPath socket
+        because none exists yet -- so every one authenticates for itself.
+        Against a locked key that is a passphrase prompt each, a dozen of
+        them stacked up, which is what a reboot looked like. AddKeysToAgent
+        does not save you: they are all launched before the first has
+        finished asking.
+
+        So this waits for the agent to hold something. The refresh button
+        calls it regardless, which is the way out if there is no agent to
+        wait for.
+        """
+        self.holding = False
         if os.environ.get("HELM_NO_WATCH") != "1":
             for host in self.order:
                 if host not in self.watched:
@@ -1577,6 +1638,12 @@ class Helm(Gtk.ApplicationWindow):
         if note:
             tail = Gtk.Label(label=note, xalign=0)
             tail.add_css_class("detail")
+            # The reason ssh gave, which is the difference between a box that
+            # is off and a name that no longer resolves. Too long for the
+            # row, so it waits under the pointer.
+            if data.get("error"):
+                tail.set_tooltip_text(
+                    f"{data['error']}\n\nRight-click the host to check again.")
             box.append(tail)
         menu = Gtk.GestureClick()
         menu.set_button(3)

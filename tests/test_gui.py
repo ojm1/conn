@@ -345,6 +345,34 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
           any("New session" in (label or "") for label in on_host)
           and any("Passwords" in (label or "") for label in on_host),
           f"menu={on_host}")
+    check("and a way to check it again, for one that came back down",
+          any("Check again" in (label or "") for label in on_host),
+          f"menu={on_host}")
+
+    # -- the ssh waits for a key rather than asking for one per connection --
+    # Driven through show_agent directly: what matters is the decision, and
+    # the real agent on the machine running this is unlocked either way.
+    released = []
+    real_connect = window.connect_hosts
+    window.connect_hosts = lambda: (released.append(True),
+                                    setattr(window, "holding", False))[0]
+    window.holding = True
+    window.show_agent(0)
+    check("an agent holding nothing holds the connections back",
+          window.holding and not released,
+          f"holding={window.holding} released={released}")
+    window.show_agent(None)
+    check("and so does no agent at all",
+          window.holding and not released,
+          f"holding={window.holding} released={released}")
+    window.show_agent(2)
+    check("a key in it lets them go, once",
+          released == [True] and not window.holding,
+          f"holding={window.holding} released={released}")
+    window.show_agent(2)
+    check("and not again on the next sweep", released == [True],
+          f"released={released}")
+    window.connect_hosts = real_connect
 
     # -- renaming, which must not disturb what is running ------------------
     renamed = hosts.rename_session("local", alpha[1], alpha[1] + "-renamed")
