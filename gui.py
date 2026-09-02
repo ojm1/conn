@@ -876,9 +876,19 @@ class Helm(Gtk.ApplicationWindow):
     # -- new session, new host ---------------------------------------------
 
     def prompt_new_session(self, host: str | None = None) -> None:
+        """Ask for a name, having first said where the session is going.
+
+        The host was only ever in the window title, and helm's own window has
+        no title bar, so nothing here trains you to read one. That matters
+        most from the + button, which takes the host off whatever is selected
+        and falls back to the first in the list when nothing is -- so the
+        answer can be a server you were not looking at. It is in the body now,
+        where the question is.
+        """
         host = host or self.selected_host()
         self.ask(f"New session on {host}", [("Name", "shell")],
-                 lambda values: self.open_session(host, values["Name"]))
+                 lambda values: self.open_session(host, values["Name"]),
+                 lead="New session on", heading=host)
 
     def prompt_rename(self, host: str, name: str) -> None:
         """Sessions get named once, when they are made, and "shell" is what
@@ -932,13 +942,30 @@ class Helm(Gtk.ApplicationWindow):
                                   ("User", ""), ("Port", "22")], add)
 
     def ask(self, title: str, fields: list[tuple[str, str]], done,
-            secret: str = "") -> None:
+            secret: str = "", lead: str = "", heading: str = "") -> None:
         """A small modal form. GTK has no one-line prompt, and four of these
-        are cheaper than four hand-built dialogs."""
+        are cheaper than four hand-built dialogs.
+
+        `heading` is the thing being acted on -- a host, usually -- set above
+        the fields where it cannot be missed. Two labels rather than one
+        marked-up string, so a host named with an ampersand is a host name and
+        not broken Pango.
+        """
         window = Gtk.Window(title=title, transient_for=self, modal=True)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8,
                       margin_top=14, margin_bottom=14,
                       margin_start=14, margin_end=14)
+        if heading:
+            top = Gtk.Box(spacing=6, margin_bottom=4)
+            if lead:
+                said = Gtk.Label(label=lead, xalign=0)
+                said.add_css_class("detail")
+                top.append(said)
+            subject = Gtk.Label(label=heading, xalign=0)
+            subject.add_css_class("heading")
+            top.append(subject)
+            box.append(top)
+
         entries: dict[str, Gtk.Entry] = {}
         for label, initial in fields:
             line = Gtk.Box(spacing=8)
@@ -1376,6 +1403,8 @@ class Helm(Gtk.ApplicationWindow):
         .mark {{ font-family: monospace; font-weight: bold; }}
         .name {{ font-family: monospace; }}
         .detail {{ color: {p.muted}; font-size: 0.85em; }}
+        .heading {{ color: {p.accent}; font-weight: bold;
+                    font-family: monospace; }}
         .placeholder {{ color: {p.muted}; }}
         .tab {{ color: {p.accent}; font-size: 0.8em;
                 font-family: monospace; }}

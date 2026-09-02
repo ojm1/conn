@@ -349,6 +349,33 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
           any("Check again" in (label or "") for label in on_host),
           f"menu={on_host}")
 
+    # -- the new-session dialog names the host it is about ----------------
+    def dialog_labels():
+        """Every label in the modal that is currently up, with its classes."""
+        tops = Gtk.Window.get_toplevels()
+        found = []
+        for i in range(tops.get_n_items()):
+            top = tops.get_item(i)
+            if top is window or not top.get_visible():
+                continue
+            for child in walk(top):
+                if isinstance(child, Gtk.Label):
+                    found.append((child.get_text(), child.get_css_classes()))
+        return found, [tops.get_item(i) for i in range(tops.get_n_items())
+                       if tops.get_item(i) is not window]
+
+    window.prompt_new_session("local")
+    labels, opened = dialog_labels()
+    check("the new-session dialog says which host in its body",
+          any(text == "local" for text, _ in labels),
+          f"labels={[t for t, _ in labels]}")
+    check("and sets it apart from the words around it",
+          any(text == "local" and "heading" in classes
+              for text, classes in labels),
+          f"labels={labels}")
+    for top in opened:
+        top.destroy()
+
     # -- the ssh waits for a key rather than asking for one per connection --
     # Driven through show_agent directly: what matters is the decision, and
     # the real agent on the machine running this is unlocked either way.
