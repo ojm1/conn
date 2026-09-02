@@ -373,6 +373,10 @@ class Helm(Gtk.ApplicationWindow):
         self.drafts: dict[tuple[str, str], tuple[str, float, bool]] = {}
         self.shape: list = []
         self.widgets: dict[tuple[str, str], dict] = {}
+        # A session opened before the sidebar knows it exists -- a brand new
+        # one -- has no row to highlight yet. The key waits here until the
+        # probe brings the row in. See select_key().
+        self.pending: tuple[str, str] | None = None
         self.watched: set[str] = set()
         self.watchers: dict[str, object] = {}
         self.inflight: set[str] = set()
@@ -1220,12 +1224,24 @@ class Helm(Gtk.ApplicationWindow):
         return True
 
     def select_key(self, key: tuple[str, str]) -> None:
+        """Highlight one session, now or as soon as it has a row.
+
+        A session made from the + button is running before anything has asked
+        the host what it has: the terminal opens on it, and the row for it
+        arrives a second later with the next probe. Selecting it here found
+        nothing and gave up quietly, and the render that brought the row in
+        then put the highlight back where it had been -- so the list sat
+        pointing at the session you had just left, for as long as you left it
+        alone. The key is kept instead, and render() finishes the job.
+        """
         index = 0
         while (row := self.list.get_row_at_index(index)) is not None:
             if getattr(row, "key", None) == key:
                 self.list.select_row(row)
+                self.pending = None
                 return
             index += 1
+        self.pending = key
 
     def _wordmark(self) -> Gtk.Widget:
         """The name, drawn rather than written.
@@ -1504,10 +1520,19 @@ class Helm(Gtk.ApplicationWindow):
             self.repaint()
             return
 
+        # What the highlight is on, and what it was promised to and could not
+        # have yet -- a session opened before its row existed. The promise
+        # stands only while that session is the one on screen, so a highlight
+        # moved by hand in the meantime is left where it was put.
         chosen = None
         row = self.list.get_selected_row()
         if row is not None:
             chosen = getattr(row, "key", None)
+        wanted, self.pending = self.pending, None
+        current = self.stack.get_visible_child()
+        if not (isinstance(current, Session)
+                and (current.host, current.name) == wanted):
+            wanted = None
 
         while (child := self.list.get_first_child()) is not None:
             self.list.remove(child)
@@ -1521,7 +1546,9 @@ class Helm(Gtk.ApplicationWindow):
                 self.list.append(self._session_row(host, session, slot))
         self.shape = shape
 
-        if chosen is not None:
+        if wanted is not None:
+            self.select_key(wanted)
+        elif chosen is not None:
             self.select_key(chosen)
 
     def announce(self) -> None:

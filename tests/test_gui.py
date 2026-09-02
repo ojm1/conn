@@ -26,6 +26,9 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("HELM_NO_WATCH", "1")
 
 SESSIONS = ("helmtest-alpha", "helmtest-beta")
+# Made by the window itself, the way you make one from the + button:
+# it exists before anything has told the list about it.
+NEW_SESSION = "helmtest-gamma"
 
 
 def display() -> bool:
@@ -97,7 +100,7 @@ def main() -> int:
 
     Panel(application_id="org.omarchy.helm.test").run(None)
 
-    for name in SESSIONS:
+    for name in (*SESSIONS, NEW_SESSION):
         tmux("kill-session", "-t", name)
 
     print(f"\n{'all good' if not check.failures else str(check.failures) + ' failed'}")
@@ -137,6 +140,42 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     check("closing a view falls back to one that is open",
           isinstance(window.stack.get_visible_child(), gui.Session))
     check("and the highlight follows that too", showing() == highlighted())
+
+    # -- one made before the list has heard of it --------------------------
+    # A session from the + button is running in the terminal a second before
+    # the probe brings its row in. The highlight cannot go anywhere yet, and
+    # the render that brings the row in used to put it back where it was --
+    # so the list sat pointing at the session you had just left.
+    fresh = ("local", NEW_SESSION)
+    window.open_session(*fresh)
+    check("a session opens before it is listed", showing() == fresh,
+          f"showing={showing()}")
+    check("and the highlight is owed to it", window.pending == fresh,
+          f"pending={window.pending}")
+    listed = window.rows["local"]["sessions"]
+    listed.append(dict(listed[0], name=NEW_SESSION,
+                       agent=dict(listed[0]["agent"], state=agent_state.READY,
+                                  label="idle", detail="")))
+    window.render()
+    check("and it takes the highlight as soon as its row arrives",
+          highlighted() == fresh,
+          f"highlighted={highlighted()} showing={showing()}")
+    check("which settles the debt", window.pending is None,
+          f"pending={window.pending}")
+
+    # The other half of it: the debt is only owed while that session is the
+    # one on screen. Go somewhere else first and the highlight stays there.
+    listed.pop()
+    window.render()
+    check("dropping the row leaves the highlight owed again",
+          window.pending == fresh, f"pending={window.pending}")
+    window.open_session(*alpha)
+    listed.append(dict(listed[0], name=NEW_SESSION,
+                       agent=dict(listed[0]["agent"], state=agent_state.READY,
+                                  label="idle", detail="")))
+    window.render()
+    check("a session you have left behind does not take the highlight back",
+          highlighted() == alpha, f"highlighted={highlighted()}")
 
     # -- the list under a changing screen ----------------------------------
     row = next((r for r in rows(window) if getattr(r, "key", None) == alpha), None)
