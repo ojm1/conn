@@ -122,6 +122,32 @@ MARKS = {
 }
 
 
+def notification(host: str, session: dict) -> "Gio.Notification":
+    """The notification for one session, wherever it is being sent from.
+
+    Built out here rather than on the window so `conn --notify` can send
+    exactly what the panel sends -- same icon, same priority, same action --
+    instead of an imitation that proves nothing.
+    """
+    note = Gio.Notification.new(f"{host}/{session['name']}")
+    detail = session["agent"]["detail"]
+    note.set_body(f"{session['agent']['label']}"
+                  + (f" -- {detail}" if detail else ""))
+    # Our own icon rather than whatever the shell picks for an unknown sender.
+    # Themed, so it follows the icon installed under the app id.
+    note.set_icon(Gio.ThemedIcon.new(APP_ID))
+    # A blocked session is the one thing here worth interrupting for;
+    # everything else this window has to say, it says in the sidebar.
+    note.set_priority(Gio.NotificationPriority.HIGH
+                      if session["agent"]["state"] == agent_state.NEEDS_YOU
+                      else Gio.NotificationPriority.NORMAL)
+    # Clicking it opens the session it is about, which is the only thing
+    # anyone wants from a notification like this.
+    note.set_default_action_and_target(
+        "app.open-session", GLib.Variant("s", f"{host}\t{session['name']}"))
+    return note
+
+
 def mark_colour(palette, state: str) -> str:
     if state in (agent_state.NEEDS_YOU, agent_state.DRAFT):
         return palette.red
@@ -1897,25 +1923,8 @@ class Conn(Gtk.ApplicationWindow):
         return settled
 
     def notify(self, host: str, session: dict) -> None:
-        note = Gio.Notification.new(f"{host}/{session['name']}")
-        detail = session["agent"]["detail"]
-        note.set_body(f"{session['agent']['label']}"
-                      + (f" -- {detail}" if detail else ""))
-        # Our own icon rather than whatever the shell picks for an unknown
-        # sender. Themed, so it follows the icon installed under the app id.
-        note.set_icon(Gio.ThemedIcon.new(APP_ID))
-        # A blocked session is the one notification here worth interrupting
-        # for; everything else this window says, it says in the sidebar.
-        note.set_priority(Gio.NotificationPriority.HIGH
-                          if session["agent"]["state"] == agent_state.NEEDS_YOU
-                          else Gio.NotificationPriority.NORMAL)
-        # Clicking it opens the session it is about, which is the only thing
-        # anyone wants from a notification like this.
-        note.set_default_action_and_target(
-            "app.open-session",
-            GLib.Variant("s", f"{host}\t{session['name']}"))
         self.get_application().send_notification(
-            f"conn-{host}-{session['name']}", note)
+            f"conn-{host}-{session['name']}", notification(host, session))
 
     def repaint(self) -> None:
         """Same rows, new words: marks, states and which ones are open."""
@@ -2333,3 +2342,37 @@ class ConnApp(Gtk.Application):
 
 def run() -> int:
     return ConnApp().run(None)
+
+
+def send_test_notification() -> int:
+    """Fire one notification, at a real session, and stop.
+
+    There is no other way to look at one on purpose: the states that send them
+    arrive when they arrive. This goes down the same path the panel does --
+    same app id, same icon, same default action -- so what you see and what
+    happens when you click it are what the real thing does, including the case
+    that was broken, where the click has to start the app from cold.
+    """
+    row = hosts.probe(hosts.LOCAL)
+    sessions = row.get("sessions") or []
+    if not sessions:
+        print("no local tmux session to point a notification at", file=sys.stderr)
+        return 1
+    # Prefer one that is actually waiting on you: that is the notification
+    # worth looking at, and the only one that goes out at HIGH.
+    session = next((s for s in sessions
+                    if s["agent"]["state"] in (agent_state.NEEDS_YOU,
+                                               agent_state.DRAFT)),
+                   sessions[0])
+
+    # Non-unique on purpose. A second conn is a *remote* instance, and GLib
+    # refuses to send a notification from one of those -- so this one declines
+    # to be the primary instead of arguing with it. The notification still
+    # carries the real application id, which is what the click is routed by.
+    app = ConnApp()
+    app.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
+    app.register(None)
+    app.send_notification(f"conn-{hosts.LOCAL}-{session['name']}",
+                          notification(hosts.LOCAL, session))
+    print(f"sent -- clicking it opens {hosts.LOCAL}/{session['name']}")
+    return 0

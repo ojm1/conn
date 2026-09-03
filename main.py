@@ -10,6 +10,7 @@ USAGE = """conn -- your servers, and what is running on them
   conn                   open the window
   conn --list            print host names (for scripts)
   conn --check           probe every host once and print the result
+  conn --notify          send one notification, to see what one looks like
   conn --help            this message
 
 Inside the window:
@@ -68,6 +69,14 @@ def main(argv: list[str]) -> int:
                       f"{row['target']}"
                       + (f"  ({row['error']})" if row["error"] else ""))
             return 0
+
+        if arg == "--notify":
+            try:
+                from gui import send_test_notification
+            except (ImportError, ValueError) as exc:
+                print(f"needs GTK4: {exc}", file=sys.stderr)
+                return 1
+            return send_test_notification()
 
         print(f"unknown option: {arg}\n\n{USAGE}", file=sys.stderr)
         return 2
