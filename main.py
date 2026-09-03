@@ -5,12 +5,12 @@ from __future__ import annotations
 import os
 import sys
 
-USAGE = """helm -- your servers, and what is running on them
+USAGE = """conn -- your servers, and what is running on them
 
-  helm                   open the window
-  helm --list            print host names (for scripts)
-  helm --check           probe every host once and print the result
-  helm --help            this message
+  conn                   open the window
+  conn --list            print host names (for scripts)
+  conn --check           probe every host once and print the result
+  conn --help            this message
 
 Inside the window:
   F1 or ?        the key guide -- every key and mouse action
@@ -27,20 +27,20 @@ Inside the window:
 Chat states:  working | needs you | unsent draft | idle | shell
 
 The list is a live view of every session's screen, updated about once a second.
-HELM_NO_WATCH=1 disables streaming and falls back to 45s polling.
-HELM_NO_LOCAL=1 drops the 'local' row for this machine.
+CONN_NO_WATCH=1 disables streaming and falls back to 45s polling.
+CONN_NO_LOCAL=1 drops the 'local' row for this machine.
 
 Sessions use the font this machine's terminal is configured with, so they
-match the terminals beside them. HELM_FONT="JetBrainsMono Nerd Font 11"
+match the terminals beside them. CONN_FONT="JetBrainsMono Nerd Font 11"
 overrides it, and ctrl-+ / ctrl-- / ctrl-0 zoom, remembered between runs.
-HELM_THEME=light|dark forces the colours.
+CONN_THEME=light|dark forces the colours.
 """
 
 
 def main(argv: list[str]) -> int:
     import hosts
 
-    # Before anything spawns an ssh: a helm started from a launcher inherits
+    # Before anything spawns an ssh: a conn started from a launcher inherits
     # no SSH_AUTH_SOCK, and would look like it had no agent at all.
     hosts.ensure_agent()
 

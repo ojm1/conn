@@ -1,8 +1,9 @@
 #!/bin/bash
-# Helm -- server panel launcher. The previous fzf version is still here as helm-fzf.
+# Conn -- server panel launcher. The retired fzf version keeps its old
+# name, helm-fzf, because nothing points at it any more.
 # Only title an interactive terminal; --list/--check output gets piped.
-[ -t 1 ] && printf '\033]0;helm\007'
+[ -t 1 ] && printf '\033]0;conn\007'
 # No venv: what is left needs nothing from pip. PyGObject, GTK and VTE are
 # system packages, and a venv sealed off from them could not see GTK at all.
-APP="$HOME/.local/share/helm"
+APP="$HOME/.local/share/conn"
 exec python3 "$APP/app/main.py" "$@"

@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=Helm
+Name=Conn
 GenericName=Server panel
-Comment=The servers you keep coding agents on, and whether they are working or waiting on you
-Exec=helm
+Comment=You have the conn -- the servers you keep coding agents on, and whether they are working or waiting on you
+Exec=conn
 Icon=utilities-terminal
 Terminal=false
 Categories=Network;RemoteAccess;
-StartupWMClass=org.omarchy.helm
+StartupWMClass=org.omarchy.conn
 Keywords=ssh;tmux;servers;agents;claude;

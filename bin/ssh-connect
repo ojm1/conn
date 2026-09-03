@@ -38,7 +38,7 @@ remote="if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s '$s
 
 # Asking the server whether it has mosh costs a round trip, which is exactly
 # what we are trying to avoid, so the answer is cached for a week.
-CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/helm"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/conn"
 
 has_mosh_server() {
   local cache="$CACHE/$1.mosh"

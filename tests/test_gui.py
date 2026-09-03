@@ -23,12 +23,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-os.environ.setdefault("HELM_NO_WATCH", "1")
+os.environ.setdefault("CONN_NO_WATCH", "1")
 
-SESSIONS = ("helmtest-alpha", "helmtest-beta")
+SESSIONS = ("conntest-alpha", "conntest-beta")
 # Made by the window itself, the way you make one from the + button:
 # it exists before anything has told the list about it.
-NEW_SESSION = "helmtest-gamma"
+NEW_SESSION = "conntest-gamma"
 
 
 def display() -> bool:
@@ -85,7 +85,7 @@ def main() -> int:
     # so the checks wait for that to come back before asking what is listed.
     class Panel(Gtk.Application):
         def do_activate(self):
-            window = gui.Helm(self)
+            window = gui.Conn(self)
 
             def later():
                 try:
@@ -98,7 +98,7 @@ def main() -> int:
 
             GLib.timeout_add_seconds(5, later)
 
-    Panel(application_id="org.omarchy.helm.test").run(None)
+    Panel(application_id="org.omarchy.conn.test").run(None)
 
     for name in (*SESSIONS, NEW_SESSION):
         tmux("kill-session", "-t", name)
@@ -191,6 +191,20 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
           "rebuilding rows kills the menu parented to one")
     check("and the words change with it",
           window.widgets[alpha]["mark"].get_label() == "!")
+
+    # -- the condition of the whole fleet, in one bar -----------------------
+    check("one session waiting puts the fleet at red alert",
+          window.alert == agent_state.NEEDS_YOU, f"alert={window.alert}")
+    session["agent"] = dict(session["agent"], state=agent_state.WORKING,
+                            label="working", detail="")
+    window.render()
+    check("nothing waiting but something working is yellow",
+          window.alert == agent_state.WORKING, f"alert={window.alert}")
+    session["agent"] = dict(session["agent"], state=agent_state.READY,
+                            label="idle", detail="")
+    window.render()
+    check("and a quiet fleet is all clear",
+          window.alert == agent_state.READY, f"alert={window.alert}")
 
     # -- notifications -----------------------------------------------------
     sent = []
@@ -289,11 +303,11 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
               theming.terminal_font([("no-such-terminal-xyz", conf,
                                       theming._foot_font)]) == theming.FALLBACK_FONT)
 
-        os.environ["HELM_FONT"] = "Fira Code 12"
-        check("and HELM_FONT wins over both",
+        os.environ["CONN_FONT"] = "Fira Code 12"
+        check("and CONN_FONT wins over both",
               theming.terminal_font([("sh", conf, theming._foot_font)])
               == "Fira Code 12")
-        del os.environ["HELM_FONT"]
+        del os.environ["CONN_FONT"]
 
         gui.ZOOM_STATE = Path(tmp) / "zoom"
         window.set_zoom(1.3)
@@ -491,13 +505,13 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
           hosts.screen_links("a" * 130 + "\n" + "b" * 130 + "\n") == [])
 
     # -- secrets -----------------------------------------------------------
-    hosts.secret_store("helmtest-host", "db", "pa55w0rd")
+    hosts.secret_store("conntest-host", "db", "pa55w0rd")
     check("a secret goes into the keyring",
-          hosts.secret_names("helmtest-host") == ["db"])
+          hosts.secret_names("conntest-host") == ["db"])
     check("and comes back out by name",
-          hosts.secret_value("helmtest-host", "db") == "pa55w0rd")
-    hosts.secret_clear("helmtest-host", "db")
-    check("and can be forgotten", hosts.secret_names("helmtest-host") == [])
+          hosts.secret_value("conntest-host", "db") == "pa55w0rd")
+    hosts.secret_clear("conntest-host", "db")
+    check("and can be forgotten", hosts.secret_names("conntest-host") == [])
 
 
 def rows(window):

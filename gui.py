@@ -1,4 +1,4 @@
-"""helm as a window: the session list beside the session itself.
+"""conn as a window: the session list beside the session itself.
 
 The panel used to hand its terminal to tmux, or throw a new window at the
 compositor and hope it landed somewhere sensible. Neither is a layout. Here the
@@ -35,13 +35,15 @@ import agent_state  # noqa: E402
 import hosts  # noqa: E402
 from theming import load_palette, terminal_font  # noqa: E402
 
-APP_ID = "org.omarchy.helm"
+APP_ID = "org.omarchy.conn"
 HOME_PAGE = "https://www.ojm.co"
-SOURCE = "https://github.com/ojm1/helm-tui"
+SOURCE = "https://github.com/ojm1/conn"
 
-# U+2388 is, literally, the helm symbol -- a ship's wheel, which is where the
-# name comes from. The wordmark under it is box-drawing rather than an image
-# so it takes the theme's accent colour like everything else.
+# The wordmark is box-drawing rather than an image so it takes the theme's
+# accent colour like everything else. There is no glyph beside it any more:
+# U+2388 is named HELM SYMBOL and reads as Kubernetes to exactly the people
+# who would run this, which is half the reason for the new name. What sits
+# there instead is the fleet's condition -- see _wordmark().
 # PCRE2 compile flags, which VTE takes as-is. NO_UTF_CHECK because the
 # terminal's own contents are the input and it is already UTF-8.
 PCRE2_MULTILINE = 0x00000400
@@ -54,9 +56,12 @@ PCRE2_NO_UTF_CHECK = 0x40000000
 URL_PATTERN = (r"(?:https?://|ftp://|file://|mailto:)"
                r"[^\s<>\"\'`{}|\\^\[\]]*[^\s<>\"\'`{}|\\^\[\].,;:!?)]")
 
-WORDMARK = """╻ ╻┏━╸╻  ┏┳┓
-┣━┫┣╸ ┃  ┃┃┃
-╹ ╹┗━╸┗━╸╹ ╹"""
+WORDMARK = """┏━╸┏━┓┏┓╻┏┓╻
+┃  ┃ ┃┃┃┃┃┃┃
+┗━╸┗━┛╹┗┛╹┗┛"""
+
+# One bar per row of the wordmark, coloured by the worst thing on the list.
+CONDITION_BAR = "▌\n▌\n▌"
 
 REFRESH_SECONDS = 45     # the full sweep: uptime, disk, the session list
 WATCH_INTERVAL = 1.0     # how often the far side re-dumps a screen
@@ -70,9 +75,9 @@ DRAFT_DWELL = 120.0
 # Zoom, the way every terminal does it: a multiplier on the font the config
 # asked for, kept between runs because a size you had to set twice is not a
 # setting.
-ZOOM_STATE = Path.home() / ".local" / "state" / "helm" / "zoom"
+ZOOM_STATE = Path.home() / ".local" / "state" / "conn" / "zoom"
 
-# Where this copy of helm is running from, so it can notice when a newer one
+# Where this copy of conn is running from, so it can notice when a newer one
 # has been installed underneath it. Sessions live in tmux, so restarting costs
 # nothing -- but only if you know there is a reason to.
 APP_DIR = Path(__file__).resolve().parent
@@ -339,9 +344,9 @@ class Session(Gtk.Box):
         self.on_exit(self)
 
 
-class Helm(Gtk.ApplicationWindow):
+class Conn(Gtk.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="helm")
+        super().__init__(application=app, title="conn")
         self.set_default_size(1400, 860)
 
         self.palette = load_palette()
@@ -366,13 +371,16 @@ class Helm(Gtk.ApplicationWindow):
         # rebuilding the widgets under the pointer -- see render().
         # What each session was last seen doing. A notification is worth
         # sending when this changes to one of the states that means you, and
-        # never for a state that was already true when helm started.
+        # never for a state that was already true when conn started.
         self.was: dict[tuple[str, str], str] = {}
         # Per session, the draft last seen in its box, when it stopped
         # changing, and whether that one has been announced already.
         self.drafts: dict[tuple[str, str], tuple[str, float, bool]] = {}
         self.shape: list = []
         self.widgets: dict[tuple[str, str], dict] = {}
+        # The condition of the fleet as a whole -- all clear, yellow alert,
+        # red alert -- which is what the bar beside the name is coloured by.
+        self.alert: str = agent_state.READY
         # A session opened before the sidebar knows it exists -- a brand new
         # one -- has no row to highlight yet. The key waits here until the
         # probe brings the row in. See select_key().
@@ -461,16 +469,19 @@ class Helm(Gtk.ApplicationWindow):
         """What a mark means, spelled out.
 
         A single red ! is only obvious once someone has told you; until then
-        it is a punctuation mark on a list.
+        it is a punctuation mark on a list. The three that matter are the
+        three conditions the bar beside the name is showing: all clear,
+        yellow alert, red alert.
         """
         marks = [
             ("!", agent_state.NEEDS_YOU, "needs you",
-             "blocked on a prompt only you can answer"),
+             "red alert -- blocked on a prompt only you can answer"),
             ("!", agent_state.DRAFT, "unsent draft",
-             "text left in the box, never submitted -- looks done, is not"),
+             "red alert -- text left in the box, never submitted"),
             ("*", agent_state.WORKING, "working",
-             "busy, or running background agents -- leave it"),
-            ("o", agent_state.READY, "idle", "waiting at an empty prompt"),
+             "yellow alert -- busy, or running agents. Leave it"),
+            ("o", agent_state.READY, "idle",
+             "all clear -- waiting at an empty prompt"),
             (".", agent_state.SHELL, "shell", "not an agent, just a shell"),
             ("?", agent_state.UNKNOWN, "unknown",
              "not recognised -- never assume this one is idle"),
@@ -554,8 +565,9 @@ class Helm(Gtk.ApplicationWindow):
         credits = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2,
                           margin_bottom=12, margin_start=12, margin_end=12)
         blurb = Gtk.Label(
-            label="helm -- the servers you keep coding agents on, and whether "
-                  "they are working or waiting on you.", xalign=0)
+            label="You have the conn -- the servers you keep coding agents "
+                  "on, and whether they are working or waiting on you.",
+            xalign=0)
         blurb.add_css_class("detail")
         blurb.set_wrap(True)
         blurb.set_max_width_chars(46)
@@ -704,7 +716,7 @@ class Helm(Gtk.ApplicationWindow):
     def show_secrets(self, host: str) -> None:
         """Whatever you keep for this host, read out of the desktop keyring.
 
-        Nothing is stored by helm and nothing is held in memory once the
+        Nothing is stored by conn and nothing is held in memory once the
         window closes: a value is fetched when you ask to see it and the
         field is emptied again on Hide. The keyring is already unlocked by
         your login password, which is the single password this all hangs on.
@@ -824,7 +836,7 @@ class Helm(Gtk.ApplicationWindow):
 
         note = Gtk.Label(
             label="Kept in the desktop keyring, which your login password "
-                  "unlocks. helm stores nothing itself.", xalign=0)
+                  "unlocks. conn stores nothing itself.", xalign=0)
         note.add_css_class("detail")
         note.set_wrap(True)
         outer.append(note)
@@ -882,7 +894,7 @@ class Helm(Gtk.ApplicationWindow):
     def prompt_new_session(self, host: str | None = None) -> None:
         """Ask for a name, having first said where the session is going.
 
-        The host was only ever in the window title, and helm's own window has
+        The host was only ever in the window title, and conn's own window has
         no title bar, so nothing here trains you to read one. That matters
         most from the + button, which takes the host off whatever is selected
         and falls back to the first in the list when nothing is -- so the
@@ -914,7 +926,7 @@ class Helm(Gtk.ApplicationWindow):
         """Follow the session that has just been renamed.
 
         A session open in the window is still the same terminal on the same
-        pty -- nothing about it is stale except the name helm files it under,
+        pty -- nothing about it is stale except the name conn files it under,
         and losing track of that would leave the view open with no row and no
         key to close it by.
         """
@@ -1029,7 +1041,7 @@ class Helm(Gtk.ApplicationWindow):
         self.add_controller(keys)
 
     def key_pressed(self, _controller, keyval, _code, state) -> bool:
-        """True means helm took the key; False leaves it to the terminal."""
+        """True means conn took the key; False leaves it to the terminal."""
         ctrl = bool(state & Gdk.ModifierType.CONTROL_MASK)
         shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
         alt = bool(state & Gdk.ModifierType.ALT_MASK)
@@ -1095,7 +1107,7 @@ class Helm(Gtk.ApplicationWindow):
 
     def typing(self) -> bool:
         """Whether the keystroke belongs to something taking text: a session's
-        terminal, or the filter box. Everything else is helm's to bind."""
+        terminal, or the filter box. Everything else is conn's to bind."""
         focus = self.get_focus()
         return isinstance(focus, (Vte.Terminal, Gtk.Editable, Gtk.Text))
 
@@ -1255,10 +1267,13 @@ class Helm(Gtk.ApplicationWindow):
                       margin_start=14, margin_end=14)
 
         top = Gtk.Box(spacing=10)
-        wheel = Gtk.Label(label="\u2388")
-        wheel.add_css_class("wheel")
-        wheel.set_valign(Gtk.Align.CENTER)
-        top.append(wheel)
+        # The mark is the fleet's condition rather than a logo: it takes the
+        # colour of the most urgent thing on the list -- green quiet, amber
+        # something working, red a session waiting on you. render() sets it.
+        self.condition = Gtk.Label(label=CONDITION_BAR, xalign=0)
+        self.condition.add_css_class("condition")
+        self.condition.set_valign(Gtk.Align.CENTER)
+        top.append(self.condition)
 
         mark = Gtk.Label(label=WORDMARK, xalign=0)
         mark.add_css_class("wordmark")
@@ -1305,13 +1320,13 @@ class Helm(Gtk.ApplicationWindow):
         self.footnote.set_hexpand(True)
         bar.append(self.footnote)
 
-        # Shown only once a newer helm has been copied over this one. There
+        # Shown only once a newer conn has been copied over this one. There
         # is no other sign: the window goes on running the code it started
         # with, and a feature added an hour ago is simply absent.
         self.updated = Gtk.Button(label="restart to update")
         self.updated.add_css_class("locked")
         self.updated.set_tooltip_text(
-            "A newer helm is installed. Restarting reloads it -- the sessions "
+            "A newer conn is installed. Restarting reloads it -- the sessions "
             "are tmux and survive it; the views close and reopen.")
         self.updated.set_visible(False)
         self.updated.connect("clicked", lambda _b: self.restart())
@@ -1324,7 +1339,7 @@ class Helm(Gtk.ApplicationWindow):
         self.unlock.set_tooltip_text(
             "The ssh agent is holding no keys, so every host will refuse you. "
             "This runs ssh-add in a terminal -- the passphrase goes to it, "
-            "never through helm.")
+            "never through conn.")
         self.unlock.set_visible(False)
         self.unlock.connect("clicked", lambda _b: self.do_unlock())
         bar.append(self.unlock)
@@ -1333,7 +1348,7 @@ class Helm(Gtk.ApplicationWindow):
         # still there fullscreen, which is where it went missing before.
         shut = Gtk.Button(icon_name="window-close-symbolic")
         shut.add_css_class("action")
-        shut.set_tooltip_text("Close helm (ctrl-q). Sessions keep running.")
+        shut.set_tooltip_text("Close conn (ctrl-q). Sessions keep running.")
         shut.connect("clicked", lambda _b: self.close())
         bar.append(shut)
         return bar
@@ -1393,7 +1408,7 @@ class Helm(Gtk.ApplicationWindow):
         .side {{ background: {p.panel};
                  border-right: 1px solid {p.surface}; }}
         .sidebar {{ background: transparent; }}
-        .wheel {{ color: {p.accent}; font-size: 1.9em; }}
+        .condition {{ font-size: 0.78em; line-height: 1.0; }}
         .wordmark {{ color: {p.accent}; font-family: monospace;
                      font-size: 0.78em; line-height: 1.0; }}
         .tagline {{ color: {p.muted}; font-size: 0.85em; padding-top: 4px; }}
@@ -1468,7 +1483,7 @@ class Helm(Gtk.ApplicationWindow):
         wait for.
         """
         self.holding = False
-        if os.environ.get("HELM_NO_WATCH") != "1":
+        if os.environ.get("CONN_NO_WATCH") != "1":
             for host in self.order:
                 if host not in self.watched:
                     self.watched.add(host)
@@ -1487,6 +1502,7 @@ class Helm(Gtk.ApplicationWindow):
         """
         shape = []
         waiting = 0
+        busy = 0
         slots = []
         for host in self.order:
             shape.append(("host", host, self.rows[host]["state"]))
@@ -1494,6 +1510,8 @@ class Helm(Gtk.ApplicationWindow):
                 if session["agent"]["state"] in (agent_state.NEEDS_YOU,
                                                  agent_state.DRAFT):
                     waiting += 1
+                elif session["agent"]["state"] == agent_state.WORKING:
+                    busy += 1
                 slots.append((host, session["name"]))
                 shape.append(("session", host, session["name"]))
 
@@ -1506,6 +1524,14 @@ class Helm(Gtk.ApplicationWindow):
             self.subtitle.add_css_class("waiting")
         else:
             self.subtitle.remove_css_class("waiting")
+        # The bar beside the name carries the same fact in a colour, for the
+        # times you are across the room and not reading words. Kept as a
+        # state rather than a colour so it can be asserted on.
+        self.alert = (agent_state.NEEDS_YOU if waiting
+                      else agent_state.WORKING if busy
+                      else agent_state.READY)
+        self.condition.set_attributes(
+            self._colour_attrs(mark_colour(self.palette, self.alert)))
         live = sum(1 for host in self.order if self.rows[host]["state"] == "up")
         said, until = self.said
         if time.monotonic() < until:
@@ -1560,7 +1586,7 @@ class Helm(Gtk.ApplicationWindow):
         the edge into needs-you, and not again until it has been something
         else in between.
 
-        The first sweep only records: everything already waiting when helm
+        The first sweep only records: everything already waiting when conn
         opens is on screen, and five notifications for it would be noise.
 
         A blocked chat is worth saying the moment it happens. A draft is not,
@@ -1628,7 +1654,7 @@ class Helm(Gtk.ApplicationWindow):
             "app.open-session",
             GLib.Variant("s", f"{host}\t{session['name']}"))
         self.get_application().send_notification(
-            f"helm-{host}-{session['name']}", note)
+            f"conn-{host}-{session['name']}", note)
 
     def repaint(self) -> None:
         """Same rows, new words: marks, states and which ones are open."""
@@ -1965,7 +1991,7 @@ class Helm(Gtk.ApplicationWindow):
         return False
 
 
-class HelmApp(Gtk.Application):
+class ConnApp(Gtk.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID)
 
@@ -1984,9 +2010,9 @@ class HelmApp(Gtk.Application):
         window.open_session(host, name)
 
     def do_activate(self):
-        window = self.props.active_window or Helm(self)
+        window = self.props.active_window or Conn(self)
         window.present()
 
 
 def run() -> int:
-    return HelmApp().run(None)
+    return ConnApp().run(None)

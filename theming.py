@@ -7,12 +7,12 @@ terminal, and picks up the theme's own reds and greens rather than approximate
 ANSI ones.
 
 Off Omarchy, or if that file is unreadable, fall back to COLORFGBG (which most
-terminals set) and then to a dark default. HELM_THEME=light|dark forces
+terminals set) and then to a dark default. CONN_THEME=light|dark forces
 the choice either way.
 
 The terminal font is read the same way -- out of the config of the terminal
-this machine actually has -- so a session inside helm is the size the rest of
-your terminals are. HELM_FONT overrides it.
+this machine actually has -- so a session inside conn is the size the rest of
+your terminals are. CONN_FONT overrides it.
 """
 
 from __future__ import annotations
@@ -183,7 +183,7 @@ def _guess_mode() -> str:
 
 
 def load_palette() -> Palette:
-    forced = os.environ.get("HELM_THEME", "auto").strip().lower()
+    forced = os.environ.get("CONN_THEME", "auto").strip().lower()
 
     values = _read_omarchy()
     if values:
@@ -279,11 +279,11 @@ def _number(text: str) -> float:
 def terminal_font(which=None) -> str:
     """A Pango font string for the session terminals.
 
-    HELM_FONT wins ("JetBrainsMono Nerd Font 10"). Otherwise this machine's
-    terminal is asked what it uses, so helm matches the terminals beside it
+    CONN_FONT wins ("JetBrainsMono Nerd Font 10"). Otherwise this machine's
+    terminal is asked what it uses, so conn matches the terminals beside it
     rather than picking a size of its own. `which` is for the tests.
     """
-    forced = os.environ.get("HELM_FONT", "").strip()
+    forced = os.environ.get("CONN_FONT", "").strip()
     if forced:
         return forced
 

@@ -1,22 +1,26 @@
-# helm
+# conn
 
 A window for the servers you keep coding-agent sessions on.
 Reads **Claude Code** and **opencode**.
 
-Named for where you stand to watch every station at once.
+*You have the conn.*
 
-Installed as `helm` -- the command is `helm`. The repository is named `helm-tui` for the terminal
-panel this began as, and to stay out of the way of the Kubernetes package manager, which it is
-unrelated to.
+Named for the bridge station: on a ship, the conn is the watch -- whoever has it is answerable for
+where everything is and what it is doing. In *The Original Series* that console was the helm; by
+*The Next Generation* the same station is Conn.
+
+Installed as `conn` -- the command is `conn`. It was called helm until September 2026, and the
+rename is exactly that collision: `helm` is the Kubernetes package manager, it is on the PATH of
+everyone who would want this, and the two do entirely unrelated jobs.
 
 It lists every `tmux` session across every host in your `~/.ssh/config`, tells you **which ones are
 working and which are waiting on you**, says so out loud when one starts waiting, and opens any of
 them in a terminal beside the list.
 
 ```
-  ⎈  ╻ ╻┏━╸╻  ┏┳┓   │ [web-01/claude]
-     ┣━┫┣╸ ┃  ┃┃┃    │
-     ╹ ╹┗━╸┗━╸╹ ╹    │ ● Restructured the Jobs column header into two rows:
+  ▌  ┏━╸┏━┓┏┓╻┏┓╻   │ [web-01/claude]
+  ▌  ┃  ┃ ┃┃┃┃┃┃┃    │
+  ▌  ┗━╸┗━┛╹┗┛╹┗┛    │ ● Restructured the Jobs column header into two rows:
      2 waiting on you│ ✻ Cooked for 24m 14s
                      │ ❯ commit and push both
   web-01             │
@@ -70,7 +74,7 @@ Markers are matched **at the start of a line**, past whatever chrome the dialog 
 them -- box bars, carets, indentation. A prompt Claude Code is asking begins its line; the same
 words inside a sentence are someone *talking* about a prompt. Quote marks are excluded from that
 chrome on purpose: prose puts one in front of the words every time, including at the start of a
-wrapped line, and a dialog never does. (A session working on helm reporting itself blocked is how
+wrapped line, and a dialog never does. (A session working on conn reporting itself blocked is how
 this was found.)
 
 Everything read off a screen is read **backwards** -- the last match, not the first. A terminal
@@ -91,7 +95,7 @@ anything when it changed. Polling pays the network round trip on every check; th
 then streams. An idle host costs nothing. A 45-second sweep covers what the stream doesn't: uptime,
 disk, mounts, and the session list.
 
-`HELM_NO_WATCH=1` falls back to plain polling.
+`CONN_NO_WATCH=1` falls back to plain polling.
 
 ## This machine, too
 
@@ -110,30 +114,36 @@ tmux new -A -s claude
 
 and they show up here, survive the window closing, and can be replied to from the panel.
 
-`HELM_NO_LOCAL=1` hides the row. A `Host local` already in `~/.ssh/config` wins: an alias you can
+`CONN_NO_LOCAL=1` hides the row. A `Host local` already in `~/.ssh/config` wins: an alias you can
 really ssh to beats one the panel invented.
 
-**If helm is itself running inside tmux**, a local session opens in its own window instead of taking
+**If conn is itself running inside tmux**, a local session opens in its own window instead of taking
 this one. It has to: tmux gives one terminal to one client, so attaching in place detaches the
-session helm is running in -- helm disappears, and F12 then closes the window rather than bringing
+session conn is running in -- conn disappears, and F12 then closes the window rather than bringing
 it back, because the client it detaches is the outer one. Remote sessions are a different tmux
 server and still take the terminal as before.
 
-For the same reason the session helm is running in is left out of its own list: attaching to it is
+For the same reason the session conn is running in is left out of its own list: attaching to it is
 the one attach that cannot go anywhere.
 
 ## In the window
 
 ```
-  ⎈  ╻ ╻┏━╸╻  ┏┳┓        1  o  shell        idle
-     ┣━┫┣╸ ┃  ┃┃┃        2  !  claude       needs you
-     ╹ ╹┗━╸┗━╸╹ ╹        3  *  shell        working
+  ▌  ┏━╸┏━┓┏┓╻┏┓╻        1  o  shell        idle
+  ▌  ┃  ┃ ┃┃┃┃┃┃┃        2  !  claude       needs you
+  ▌  ┗━╸┗━┛╹┗┛╹┗┛        3  *  shell        working
      2 waiting on you    ...
                          ?  6/7 hosts · 12 sessions
 ```
 
-U+2388 is, literally, the helm symbol. The `?` at the foot of the list has the marks, the keys and
-who wrote it.
+The bar beside the name is the condition of the whole fleet, and it is the one thing worth reading
+from across the room: green is all clear, amber is something working, red is a session waiting on
+you. It is the same three states the marks carry, added up.
+
+There is deliberately no ship's wheel. U+2388 is named HELM SYMBOL and reads as Kubernetes to
+precisely the people who would run this.
+
+The `?` at the foot of the list has the marks, the keys and who wrote it.
 
 ## Keys and actions
 
@@ -179,7 +189,7 @@ keystroke, so announcing the state itself interrupted whoever was at the keyboar
 sentence they were in the middle of. A draft is announced once it has sat **unchanged for two
 minutes**; every edit puts the clock back to the start.
 
-States that were already true when helm started are on screen already, and are not announced.
+States that were already true when conn started are on screen already, and are not announced.
 
 ### Selecting text an agent is sitting on
 
@@ -190,12 +200,12 @@ off. With nothing selected, copy is a no-op, so the footer says **nothing select
 while you drag** rather than leaving you to wonder whether the key is bound. A copy that works says
 so too, with the number of characters, because the alternative is finding out at the other end.
 
-`ctrl-shift-s` copies the **whole screen** and needs no selection at all -- helm already holds that
+`ctrl-shift-s` copies the **whole screen** and needs no selection at all -- conn already holds that
 text, it is the same capture the state is read from.
 
 ## When it has been replaced underneath it
 
-`cp *.py ~/.local/share/helm/app/` does not touch the window already running: it goes on running
+`cp *.py ~/.local/share/conn/app/` does not touch the window already running: it goes on running
 the code it started with, and a feature added an hour ago is simply not there. So the footer says
 **restart to update** once the files on disk are newer than the ones in memory, and clicking it
 replaces the process with the installed one. The sessions are tmux and outlive it -- the views
@@ -203,14 +213,14 @@ close and come straight back.
 
 ## The one password
 
-helm never sees it. Your ssh key is unlocked once -- by the desktop keyring at login -- and every
+conn never sees it. Your ssh key is unlocked once -- by the desktop keyring at login -- and every
 `ssh` it spawns rides the agent, which is why no host prompts you. If the agent is holding nothing,
 the foot of the list says so and offers to run `ssh-add` in a terminal of its own: the passphrase
-goes from your keyboard to `ssh-add`, never through helm.
+goes from your keyboard to `ssh-add`, never through conn.
 
 Right-click a host for **passwords and keys** -- whatever else you keep for it: a database password,
 an API key. They live in the desktop keyring, which the same login password already unlocks, so
-"one password for all of it" is the arrangement that exists rather than a thing to build. helm
+"one password for all of it" is the arrangement that exists rather than a thing to build. conn
 stores nothing itself: a value is fetched when you press Show, masked again on Hide, and a copy is
 wiped off the clipboard after thirty seconds.
 
@@ -231,35 +241,35 @@ Requires Python 3.11+, GTK4 and VTE locally, and `tmux` on the hosts you connect
 
 ```bash
 sudo pacman -S gtk4 vte4 python-gobject
-mkdir -p ~/.local/share/helm/app
-cp *.py ~/.local/share/helm/app/
+mkdir -p ~/.local/share/conn/app
+cp *.py ~/.local/share/conn/app/
 cp bin/* ~/.local/bin/
-helm --check      # probe every host once and print what it found
+conn --check      # probe every host once and print what it found
 ```
 
 Nothing from pip, and no virtualenv: GTK, VTE and PyGObject are system packages, and a venv sealed
 off from them cannot see GTK at all.
 
-`cp org.omarchy.helm.desktop ~/.local/share/applications/` if you want it in a launcher. It is a
-window now, so starting it through a TUI wrapper (`omarchy-launch-tui helm`, or a terminal binding) leaves an empty
+`cp org.omarchy.conn.desktop ~/.local/share/applications/` if you want it in a launcher. It is a
+window now, so starting it through a TUI wrapper (`omarchy-launch-tui conn`, or a terminal binding) leaves an empty
 terminal sitting beside the real one -- the terminal is hosting a process that no longer draws
 anything in it.
 
 Colours follow the [Omarchy](https://omarchy.org) desktop theme when present, and fall back to a
-built-in palette otherwise. `HELM_THEME=light|dark` forces it.
+built-in palette otherwise. `CONN_THEME=light|dark` forces it.
 
 ## The font is the one you already chose
 
-A session inside helm should be the size of the terminals beside it, so the font is not helm's to
+A session inside conn should be the size of the terminals beside it, so the font is not conn's to
 pick: it is read out of the config of the terminal this machine actually has -- foot, ghostty,
 alacritty or kitty, first one whose config is readable **and** whose binary is installed. Only if
 none is does it fall back to `monospace 11`.
 
-`HELM_FONT="JetBrainsMono Nerd Font 11"` overrides that outright.
+`CONN_FONT="JetBrainsMono Nerd Font 11"` overrides that outright.
 
 `ctrl-+`, `ctrl--` and `ctrl-0` zoom, the way a terminal does -- a multiplier on that font rather
 than a second opinion about it, applied to every session at once and remembered in
-`~/.local/state/helm/zoom`. Worth knowing if it still looks off: your terminal may scale points by
+`~/.local/state/conn/zoom`. Worth knowing if it still looks off: your terminal may scale points by
 the monitor's DPI where GTK uses the desktop's text-scaling factor, so the same "9" can land a
 little different. That is what the zoom is for.
 
@@ -277,7 +287,7 @@ tmux is still doing the real work on the far side -- it is what makes a session 
 closing. You just stop seeing it as a window of its own. Each session names itself in tmux's status
 bar (`[web-01/claude]`), which is how you know which one you are typing into.
 
-helm itself has no title bar: GTK hides it when a window goes fullscreen, so nothing that matters
+conn itself has no title bar: GTK hides it when a window goes fullscreen, so nothing that matters
 can live there.
 
 ## Licence

@@ -42,7 +42,7 @@ CLAUDE = {
     # its line, behind the box bar.
     "boxed prompt": ("╭──────────────╮\n│ Bash command\n│\n│ rm -rf build\n│\n"
                      "│ Do you want to proceed?\n│ ❯ 1. Yes\n│   2. No\n╰──────────────╯"),
-    # Someone *talking* about a prompt. This is a session working on helm,
+    # Someone *talking* about a prompt. This is a session working on conn,
     # with the words on screen inside a sentence -- which is exactly how the
     # local session reported itself blocked while it was busy writing this.
     "prose about prompts": (

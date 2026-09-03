@@ -51,7 +51,7 @@ _OWN_SESSION: str | None = None
 def own_session() -> str:
     """The local tmux session the panel is running inside, or "".
 
-    Normally "" -- helm gets a window of its own. Started from inside tmux it
+    Normally "" -- conn gets a window of its own. Started from inside tmux it
     is a real session, and listing it would offer to attach to the session you
     are already in: the one place an attach cannot go. So it is left out.
     """
@@ -119,8 +119,8 @@ def list_hosts() -> list[str]:
     # This machine leads the list: it is the one host that is always up, and
     # the sessions on it are the ones you are most likely to be mid-thought in.
     # A config that already defines "local" keeps it -- an alias the user can
-    # actually ssh to beats one the panel invented. HELM_NO_LOCAL=1 hides it.
-    if LOCAL not in names and os.environ.get("HELM_NO_LOCAL") != "1":
+    # actually ssh to beats one the panel invented. CONN_NO_LOCAL=1 hides it.
+    if LOCAL not in names and os.environ.get("CONN_NO_LOCAL") != "1":
         names.insert(0, LOCAL)
     return names
 
@@ -476,8 +476,8 @@ def connect_argv(host: str, session: str) -> list[str]:
     return ["ssh-connect", host, session]
 
 
-SESSION_APP_ID = "org.omarchy.helm-session"
-PANEL_APP_ID = "org.omarchy.helm"
+SESSION_APP_ID = "org.omarchy.conn-session"
+PANEL_APP_ID = "org.omarchy.conn"
 
 
 # NOTE: no hyprctl window manipulation here on purpose. On this setup every
@@ -501,7 +501,7 @@ def launch(argv: list[str], app_id: str = SESSION_APP_ID) -> None:
 # uwsm-app ...`, so it is gone within milliseconds whether the session came up
 # or not, and the real error is on the far side of a terminal we do not own.
 LAUNCH_ERROR = Path(os.environ.get("XDG_CACHE_HOME",
-                                   Path.home() / ".cache")) / "helm" / "last-launch-error"
+                                   Path.home() / ".cache")) / "conn" / "last-launch-error"
 
 
 def launch_error(since: float) -> str:
@@ -634,7 +634,7 @@ def ensure_agent() -> str:
     those age out does every host start refusing at once.
 
     Setting it here means every ssh, ssh-add and secret-tool spawned below
-    inherits it, whichever way helm was started.
+    inherits it, whichever way conn was started.
     """
     current = os.environ.get("SSH_AUTH_SOCK", "")
     try:
@@ -659,7 +659,7 @@ def agent_keys() -> int | None:
     """How many identities the ssh agent is holding, or None if there is no
     agent to ask.
 
-    This is the whole of helm's involvement with your passphrase. The key is
+    This is the whole of conn's involvement with your passphrase. The key is
     unlocked once -- by the desktop keyring at login, or by the button below
     -- and every ssh spawned from here rides the agent. Holding the passphrase
     ourselves would add a second copy of it and protect nothing.
@@ -680,7 +680,7 @@ def unlock_agent() -> None:
     """Ask ssh-add for the passphrase, in a terminal of its own.
 
     Deliberately not a dialog of ours: the prompt belongs to ssh-add and the
-    keyring, so the passphrase goes from your keyboard to them without helm
+    keyring, so the passphrase goes from your keyboard to them without conn
     ever being on the path.
     """
     launch(["bash", "-lc",
@@ -689,9 +689,9 @@ def unlock_agent() -> None:
 
 # Secrets live in the desktop keyring, which your login password already
 # unlocks -- so "one password for everything" is not a feature to build here,
-# it is the arrangement that exists. helm stores nothing itself and reads a
+# it is the arrangement that exists. conn stores nothing itself and reads a
 # value only when you ask to see it.
-SECRET_APP = "helm"
+SECRET_APP = "conn"
 
 
 def secret_names(host: str) -> list[str]:
@@ -738,7 +738,7 @@ def secret_store(host: str, name: str, value: str) -> None:
         raise HostError("A name is required.")
     try:
         done = subprocess.run(
-            ["secret-tool", "store", "--label", f"helm: {host}/{name}",
+            ["secret-tool", "store", "--label", f"conn: {host}/{name}",
              "application", SECRET_APP, "host", host, "name", name],
             input=value, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError) as exc:
