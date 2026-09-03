@@ -111,6 +111,18 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     alpha = ("local", SESSIONS[0])
     beta = ("local", SESSIONS[1])
 
+    # Nothing in here should reach the desktop. A test run that leaves four
+    # toasts in your notification centre is a test run you stop wanting to
+    # run, and the states below are poked by hand precisely to fire them.
+    sent: list = []
+    window.notify = lambda host, s: sent.append(
+        (host, s["name"], s["agent"]["state"]))
+
+    check("the app tells the desktop what it is called",
+          gui.GLib.get_application_name() == "conn",
+          f"name={gui.GLib.get_application_name()!r} -- "
+          "an unnamed app is announced as python3")
+
     check("the local host lists its sessions",
           alpha in window.slots and beta in window.slots,
           f"slots={window.slots}")
@@ -207,8 +219,7 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
           window.alert == agent_state.READY, f"alert={window.alert}")
 
     # -- notifications -----------------------------------------------------
-    sent = []
-    window.notify = lambda host, s: sent.append((host, s["name"], s["agent"]["state"]))
+    sent.clear()
     window.render()
     check("no notification while the state stands", not sent)
     session["agent"] = dict(session["agent"], state=agent_state.READY, label="idle")

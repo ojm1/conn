@@ -6,6 +6,7 @@ Comment=You have the conn -- the servers you keep coding agents on, and whether 
 Exec=conn
 Icon=org.omarchy.conn
 Terminal=false
+DBusActivatable=true
 Categories=Network;RemoteAccess;
 StartupWMClass=org.omarchy.conn
 Keywords=ssh;tmux;servers;agents;claude;

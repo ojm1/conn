@@ -36,6 +36,14 @@ import hosts  # noqa: E402
 from theming import load_palette, terminal_font  # noqa: E402
 
 APP_ID = "org.omarchy.conn"
+
+# What the desktop calls this process. Without it every notification is
+# announced as "python3", with a letter in a circle where the icon should be:
+# the name comes from here, not from the application id. Set on import
+# because it belongs to the process rather than to one class -- anything that
+# imports this module is conn, including the tests.
+GLib.set_application_name("conn")
+GLib.set_prgname(APP_ID)
 HOME_PAGE = "https://www.ojm.co"
 SOURCE = "https://github.com/ojm1/conn"
 
@@ -1858,7 +1866,14 @@ class Conn(Gtk.ApplicationWindow):
         detail = session["agent"]["detail"]
         note.set_body(f"{session['agent']['label']}"
                       + (f" -- {detail}" if detail else ""))
-        note.set_priority(Gio.NotificationPriority.NORMAL)
+        # Our own icon rather than whatever the shell picks for an unknown
+        # sender. Themed, so it follows the icon installed under the app id.
+        note.set_icon(Gio.ThemedIcon.new(APP_ID))
+        # A blocked session is the one notification here worth interrupting
+        # for; everything else this window says, it says in the sidebar.
+        note.set_priority(Gio.NotificationPriority.HIGH
+                          if session["agent"]["state"] == agent_state.NEEDS_YOU
+                          else Gio.NotificationPriority.NORMAL)
         # Clicking it opens the session it is about, which is the only thing
         # anyone wants from a notification like this.
         note.set_default_action_and_target(
@@ -2264,10 +2279,15 @@ class ConnApp(Gtk.Application):
         self.add_action(action)
 
     def open_from_notification(self, _action, target):
-        window = self.props.active_window
-        if window is None:
-            return
+        """Open the session a notification was about.
+
+        The window may not exist. A notification outlives the process that
+        sent it, so clicking one an hour later is how the app gets started --
+        the action arrives first and do_activate() never runs. Returning early
+        when there was no window was why clicking did nothing at all.
+        """
         host, _, name = target.get_string().partition("\t")
+        window = self.props.active_window or Conn(self)
         window.present()
         window.open_session(host, name)
 
