@@ -20,7 +20,14 @@ from pathlib import Path
 import agent_state
 
 SSH_CONFIG = Path.home() / ".ssh" / "config"
-MNT_ROOT = Path.home() / "mnt"
+# Mountpoints live in the runtime directory, not the home folder. They hold
+# nothing -- a mountpoint is an empty hook to hang a filesystem on -- so a
+# folder in ~ for each server you once looked at was pure clutter. The runtime
+# directory is tmpfs and is cleared at logout, which also settles the leftovers
+# for good: a reboot with a mount still up can no longer strand a directory,
+# because the directory does not survive either.
+MNT_ROOT = Path(os.environ.get("XDG_RUNTIME_DIR")
+                or Path.home() / ".cache") / "conn" / "mnt"
 
 # The machine the panel itself runs on, listed as a host under this reserved
 # name. It is not "ssh to yourself": run_argv hands the same scripts straight
@@ -494,7 +501,7 @@ def files_root(host: str) -> Path:
 
 def files_label(host: str) -> str:
     """That path as a prompt would write it."""
-    return "~" if is_local(host) else f"~/mnt/{host}"
+    return "~" if is_local(host) else "files"
 
 
 def mount(host: str) -> str:

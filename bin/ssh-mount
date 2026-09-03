@@ -1,10 +1,17 @@
 #!/bin/bash
-# Mount a remote host as a local folder under ~/mnt/<host> (drag-and-drop in
-# Nautilus, edit remote files with local tools). This is the SFTP replacement.
+# Mount a remote host as a local folder (drag-and-drop in Nautilus, edit remote
+# files with local tools). This is the SFTP replacement.
+#
+# Mountpoints go under $XDG_RUNTIME_DIR/conn/mnt, not ~/mnt: they hold nothing,
+# so a folder in the home directory for every server ever looked at was
+# clutter -- and the runtime directory is tmpfs, so a reboot with a mount still
+# up cannot leave an empty one behind.
 #
 # Usage:  ssh-mount <host> [remote-path]     default remote-path: the login dir
 #         ssh-mount -u <host>                unmount
 set -uo pipefail
+
+root="${XDG_RUNTIME_DIR:-$HOME/.cache}/conn/mnt"
 
 if ! command -v sshfs >/dev/null 2>&1; then
   echo "sshfs is not installed. Install it with:  omarchy pkg add sshfs"
@@ -13,7 +20,7 @@ fi
 
 if [[ ${1:-} == "-u" || ${1:-} == "--unmount" ]]; then
   host=${2:?usage: ssh-mount -u <host>}
-  mnt="$HOME/mnt/$host"
+  mnt="$root/$host"
 
   if ! mountpoint -q "$mnt"; then
     echo "not mounted: $mnt"
@@ -38,7 +45,7 @@ fi
 
 host=${1:?usage: ssh-mount <host> [remote-path]}
 remote=${2:-}
-mnt="$HOME/mnt/$host"
+mnt="$root/$host"
 
 if mountpoint -q "$mnt"; then
   echo "already mounted: $mnt"
@@ -49,8 +56,8 @@ mkdir -p "$mnt"
 
 # sshfs's exit status was not being read, so a refused host printed "mounted"
 # and exited 0 -- which conn took at face value -- and left behind the empty
-# directory made a line above. An empty ~/mnt/<host> is indistinguishable
-# from a mount that worked until you look inside it.
+# directory made a line above. An empty mountpoint is indistinguishable from
+# a mount that worked until you look inside it.
 if ! err=$(sshfs "$host:$remote" "$mnt" \
   -o reconnect \
   -o ServerAliveInterval=15 \
