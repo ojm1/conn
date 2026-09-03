@@ -250,7 +250,19 @@ conn --check      # probe every host once and print what it found
 Nothing from pip, and no virtualenv: GTK, VTE and PyGObject are system packages, and a venv sealed
 off from them cannot see GTK at all.
 
-`cp org.omarchy.conn.desktop ~/.local/share/applications/` if you want it in a launcher. It is a
+For a launcher entry with its own icon:
+
+```bash
+cp org.omarchy.conn.desktop ~/.local/share/applications/
+install -Dm644 icons/org.omarchy.conn.svg ~/.local/share/icons/hicolor/scalable/apps/org.omarchy.conn.svg
+for s in 48 64 128 256; do
+  rsvg-convert -w $s -h $s icons/org.omarchy.conn.svg \
+    -o ~/.local/share/icons/hicolor/${s}x${s}/apps/org.omarchy.conn.png
+done
+gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor
+```
+
+The icon is named for the app id, so the window picks it up for the taskbar too. It is a
 window now, so starting it through a TUI wrapper (`omarchy-launch-tui conn`, or a terminal binding) leaves an empty
 terminal sitting beside the real one -- the terminal is hosting a process that no longer draws
 anything in it.

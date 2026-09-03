@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>conn</title>
+  <!-- Flexoki, the palette the panel itself runs in: paper #FFFCF0, blue
+       #205EA6, red #D14D41. The C is the wordmark's own letterform, drawn
+       with square caps because it is box-drawing. In its mouth are three
+       session rows, ragged like real ones, and the one waiting on you. -->
+  <rect x="0" y="0" width="128" height="128" rx="28" fill="#FFFCF0"/>
+  <rect x="0.75" y="0.75" width="126.5" height="126.5" rx="27.25" fill="none" stroke="#CECDC3" stroke-width="1.5"/>
+  <path d="M64 32 H34 V96 H64" fill="none" stroke="#205EA6" stroke-width="12" stroke-linecap="butt" stroke-linejoin="miter"/>
+  <rect x="76" y="34" width="30" height="10" fill="#205EA6"/>
+  <rect x="76" y="59" width="24" height="10" fill="#D14D41"/>
+  <rect x="76" y="84" width="18" height="10" fill="#205EA6"/>
+</svg>
