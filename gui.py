@@ -1660,6 +1660,7 @@ class Conn(Gtk.ApplicationWindow):
                      font-size: 0.78em; line-height: 1.0; }}
         .tagline {{ color: {p.muted}; font-size: 0.85em; padding-top: 4px; }}
         .tagline.waiting {{ color: {p.red}; }}
+        .tagline.busy {{ color: {p.yellow}; }}
         .footer {{ border-top: 1px solid {p.surface}; }}
         .help {{ font-family: monospace; font-weight: bold;
                  color: {p.accent}; min-width: 26px; }}
@@ -1807,20 +1808,24 @@ class Conn(Gtk.ApplicationWindow):
                 shape.append(("session", host, session["name"]))
 
         self.slots = slots
-        self.subtitle.set_text(
-            f"{waiting} waiting on you" if waiting else "nothing waiting")
-        # The one number worth reading from across the room, so it is allowed
-        # to be the one coloured thing up there.
-        if waiting:
-            self.subtitle.add_css_class("waiting")
-        else:
-            self.subtitle.remove_css_class("waiting")
-        # The bar beside the name carries the same fact in a colour, for the
-        # times you are across the room and not reading words. Kept as a
-        # state rather than a colour so it can be asserted on.
+        # The bar beside the name and the line under it say the same thing,
+        # one in colour and one in words. They did not: the bar had three
+        # states and the line had two, so "nothing waiting" sat under an amber
+        # bar whenever something was working. True -- nothing was waiting on
+        # you -- and unreadable as anything but a contradiction.
         self.alert = (agent_state.NEEDS_YOU if waiting
                       else agent_state.WORKING if busy
                       else agent_state.READY)
+        self.subtitle.set_text(
+            f"{waiting} waiting on you" if waiting
+            else f"{busy} working" if busy
+            else "all clear")
+        for name, on in (("waiting", self.alert == agent_state.NEEDS_YOU),
+                         ("busy", self.alert == agent_state.WORKING)):
+            if on:
+                self.subtitle.add_css_class(name)
+            else:
+                self.subtitle.remove_css_class(name)
         self.condition.set_attributes(
             self._colour_attrs(mark_colour(self.palette, self.alert)))
         live = sum(1 for host in self.order if self.rows[host]["state"] == "up")

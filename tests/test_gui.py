@@ -223,11 +223,18 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     window.render()
     check("nothing waiting but something working is yellow",
           window.alert == agent_state.WORKING, f"alert={window.alert}")
+    check("and the line under the name says so too",
+          window.subtitle.get_text().endswith("working"),
+          f"subtitle={window.subtitle.get_text()!r} -- an amber bar over "
+          "\"nothing waiting\" reads as a contradiction")
     session["agent"] = dict(session["agent"], state=agent_state.READY,
                             label="idle", detail="")
     window.render()
     check("and a quiet fleet is all clear",
           window.alert == agent_state.READY, f"alert={window.alert}")
+    check("in both places",
+          window.subtitle.get_text() == "all clear",
+          f"subtitle={window.subtitle.get_text()!r}")
 
     # -- notifications -----------------------------------------------------
     sent.clear()
