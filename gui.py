@@ -71,6 +71,11 @@ WORDMARK = """┏━╸┏━┓┏┓╻┏┓╻
 # One bar per row of the wordmark, coloured by the worst thing on the list.
 CONDITION_BAR = "▌\n▌\n▌"
 
+# How wide the list is, and stays. Wide enough for the longest host name you
+# have beside a session's state, and narrow enough to leave the terminal the
+# room it actually needs.
+SIDEBAR_WIDTH = 320
+
 REFRESH_SECONDS = 45     # the full sweep: uptime, disk, the session list
 WATCH_INTERVAL = 1.0     # how often the far side re-dumps a screen
 WATCH_RETRY_MIN = 3.0
@@ -491,7 +496,8 @@ class Conn(Gtk.ApplicationWindow):
 
         side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         side.add_css_class("side")
-        side.set_size_request(300, -1)
+        side.set_size_request(SIDEBAR_WIDTH, -1)
+        side.set_hexpand(False)
         side.append(self._wordmark())
         side.append(self.filter)
         side.append(scroller)
@@ -510,15 +516,15 @@ class Conn(Gtk.ApplicationWindow):
         self.placeholder.set_justify(Gtk.Justification.CENTER)
         self.stack.add_named(self.placeholder, "placeholder")
 
-        split = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
-        split.set_start_child(side)
-        split.set_end_child(self.stack)
-        split.set_position(300)
-        split.set_resize_start_child(False)
-        # And it cannot be dragged narrower than it can draw itself. GTK lets
-        # a Paned shrink a child past its minimum by default, which is the
-        # other way the sidebar ends up clipped.
-        split.set_shrink_start_child(False)
+        # Not a Paned. The divider was never worth dragging -- the list holds
+        # host names and a short detail, and neither wants more room -- but it
+        # sat under the pointer all day and got caught on the way to a row.
+        # A fixed width is one less thing that can be knocked out of shape,
+        # and it is the shape the footer's minimum is measured against.
+        split = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self.stack.set_hexpand(True)
+        split.append(side)
+        split.append(self.stack)
         self.set_child(split)
 
     def _guide(self) -> Gtk.Popover:

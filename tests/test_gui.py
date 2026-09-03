@@ -267,21 +267,25 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     window.clear_filter()
 
     # -- controls that must outlive fullscreen -----------------------------
-    icons = [c.get_icon_name() for c in walk(window.get_child().get_start_child())
+    icons = [c.get_icon_name() for c in walk(window.get_child().get_first_child())
              if isinstance(c, Gtk.Button) and c.get_icon_name()]
     check("every action lives in the sidebar",
           {"list-add-symbolic", "network-server-symbolic",
            "view-refresh-symbolic", "window-close-symbolic"} <= set(icons),
           f"icons={icons}")
     # -- the sidebar has to survive its own footer -------------------------
-    side = window.get_child().get_start_child()
+    side = window.get_child().get_first_child()
     window.updated.set_visible(True)
     window.unlock.set_visible(True)
     smallest, _ = side.get_preferred_size()
     check("the sidebar still fits when the footer buttons appear",
-          smallest.width <= 300,
-          f"minimum={smallest.width}px against a 300px pane -- a sidebar that "
-          "cannot fit its own minimum is drawn clipped")
+          smallest.width <= gui.SIDEBAR_WIDTH,
+          f"minimum={smallest.width}px against a {gui.SIDEBAR_WIDTH}px "
+          "sidebar -- one that cannot fit its own minimum is drawn clipped")
+    check("and the list cannot be resized by accident",
+          not isinstance(window.get_child(), Gtk.Paned),
+          "a drag handle beside a list you click all day is a handle you "
+          "catch by mistake")
     window.updated.set_visible(False)
     window.unlock.set_visible(False)
 
