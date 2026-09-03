@@ -77,6 +77,18 @@ DRAFT_DWELL = 120.0
 # setting.
 ZOOM_STATE = Path.home() / ".local" / "state" / "conn" / "zoom"
 
+# Which servers are yours day to day. Kept beside the config rather than in
+# it: "starred" has no representation in ssh config, and the cheap way of
+# faking one -- commenting the block out -- would break ssh, scp, rsync and
+# every git remote using that alias for the sake of a tidier sidebar.
+STARS_STATE = Path.home() / ".local" / "state" / "conn" / "starred"
+
+# A starred host is live: a watch stream and the 45s sweep. The rest are
+# probed on a long timer and never streamed, which is what stops a list of
+# forty servers being eighty ssh connections. They still report a session
+# waiting on you -- being unstarred means quieter, not unwatched.
+SLOW_REFRESH = 300.0
+
 # Where this copy of conn is running from, so it can notice when a newer one
 # has been installed underneath it. Sessions live in tmux, so restarting costs
 # nothing -- but only if you know there is a reason to.
@@ -119,6 +131,28 @@ def source_stamp() -> float:
         return max(path.stat().st_mtime for path in APP_DIR.glob("*.py"))
     except (OSError, ValueError):
         return 0.0
+
+
+def read_stars() -> set[str] | None:
+    """The starred hosts, or None when the file has never been written.
+
+    None is not the empty set: a first run with nothing starred would draw an
+    empty sidebar under a full one, which looks like the app has lost your
+    servers. The window treats None as "star what is already there".
+    """
+    try:
+        names = STARS_STATE.read_text().split()
+    except OSError:
+        return None
+    return set(names)
+
+
+def save_stars(names) -> None:
+    try:
+        STARS_STATE.parent.mkdir(parents=True, exist_ok=True)
+        STARS_STATE.write_text("\n".join(sorted(names)) + "\n")
+    except OSError:
+        pass        # a star that does not persist is not worth an error
 
 
 def read_zoom() -> float:
@@ -381,6 +415,14 @@ class Conn(Gtk.ApplicationWindow):
         # The condition of the fleet as a whole -- all clear, yellow alert,
         # red alert -- which is what the bar beside the name is coloured by.
         self.alert: str = agent_state.READY
+        # The servers you actually work on. Everything else lives under one
+        # collapsed row rather than being hidden: a server you add today is
+        # one click away, not something you must remember to un-hide.
+        self.starred: set[str] = set()
+        self.showing_rest = False
+        # When each host was last probed, so the unstarred can be swept on a
+        # long timer without a second GLib source to keep in step.
+        self.probed: dict[str, float] = {}
         # A session opened before the sidebar knows it exists -- a brand new
         # one -- has no row to highlight yet. The key waits here until the
         # probe brings the row in. See select_key().
@@ -428,8 +470,10 @@ class Conn(Gtk.ApplicationWindow):
         self.filter = Gtk.SearchEntry()
         self.filter.set_placeholder_text("filter")
         self.filter.add_css_class("filter")
-        self.filter.connect("search-changed",
-                            lambda _e: self.list.invalidate_filter())
+        # Rebuild rather than just re-filter: a search has to be able to turn
+        # up an unstarred server, and invalidate_filter() can only hide rows
+        # that already exist.
+        self.filter.connect("search-changed", lambda _e: self.refilter())
         self.filter.connect("stop-search", lambda _e: self.clear_filter())
 
         scroller = Gtk.ScrolledWindow()
@@ -521,7 +565,7 @@ class Conn(Gtk.ApplicationWindow):
             ("ctrl-click", "open a link in a session"),
             ("right-click a session", "open it, rename it, or kill it"),
             ("right-click a host",
-             "check it again, new session, files, passwords, forget it"),
+             "star it, check again, new session, files, passwords, forget it"),
             ("right-click the screen", "copy, paste, and every link on it"),
             ("hover a session", "the bin at the end of the row kills it"),
             ("+ / server icon", "new session here / add a host to ~/.ssh/config"),
@@ -622,7 +666,9 @@ class Conn(Gtk.ApplicationWindow):
         ])
 
     def host_menu(self, row, host: str, x: float, y: float) -> None:
-        items = [("Check again", lambda: self.recheck(host), False),
+        items = [("Unstar" if host in self.starred else "Star",
+                  lambda: self.toggle_star(host), False),
+                 ("Check again", lambda: self.recheck(host), False),
                  ("New session...", lambda: self.prompt_new_session(host), False),
                  ("Passwords and keys...", lambda: self.show_secrets(host), False)]
         if hosts.is_local(host):
@@ -946,6 +992,35 @@ class Conn(Gtk.ApplicationWindow):
         self.sweep()
         return GLib.SOURCE_REMOVE
 
+    def toggle_star(self, host: str) -> None:
+        """Promote a server to the top of the list, or let it back down.
+
+        Starring is what decides whether a host is streamed. Unstarring drops
+        the stream then and there rather than at the next sweep, because the
+        point of it is the connection, not the row.
+        """
+        if host in self.starred:
+            self.starred.discard(host)
+            proc = self.watchers.pop(host, None)
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            self.watched.discard(host)
+            self.probed[host] = time.monotonic()
+        else:
+            self.starred.add(host)
+            if (os.environ.get("CONN_NO_WATCH") != "1"
+                    and host not in self.watched and not self.holding):
+                self.watched.add(host)
+                threading.Thread(target=self._stream, args=(host,),
+                                 name=f"watch-{host}", daemon=True).start()
+            self.recheck(host)      # it is live now; do not wait for the sweep
+        save_stars(self.starred)
+        self.shape = []
+        self.render()
+
     def confirm_forget(self, host: str) -> None:
         """Ask before editing ~/.ssh/config, and offer to take the passwords
         with it.
@@ -1020,6 +1095,10 @@ class Conn(Gtk.ApplicationWindow):
         self.watched.discard(host)
         self.rows.pop(host, None)
         self.inflight.discard(host)
+        self.probed.pop(host, None)
+        if host in self.starred:
+            self.starred.discard(host)
+            save_stars(self.starred)
 
         self.load_hosts()
         said = f"forgot {host}"
@@ -1548,6 +1627,16 @@ class Conn(Gtk.ApplicationWindow):
         for gone in [h for h in self.rows if h not in self.order]:
             del self.rows[gone]
 
+        # First run: everything you already had stays where it was, and only
+        # servers added from here on arrive quiet. Upgrading should not empty
+        # your sidebar and ask you to rebuild it.
+        stars = read_stars()
+        if stars is None:
+            self.starred = set(self.order)
+            save_stars(self.starred)
+        else:
+            self.starred = {h for h in stars if h in self.order}
+
         self.render()
         if connect:
             self.connect_hosts()
@@ -1570,11 +1659,35 @@ class Conn(Gtk.ApplicationWindow):
         self.holding = False
         if os.environ.get("CONN_NO_WATCH") != "1":
             for host in self.order:
+                if host not in self.starred:
+                    continue    # unstarred hosts are polled, never streamed
                 if host not in self.watched:
                     self.watched.add(host)
                     threading.Thread(target=self._stream, args=(host,),
                                      name=f"watch-{host}", daemon=True).start()
         self.sweep()
+
+    def listed(self) -> list[tuple[str, str]]:
+        """The sidebar, top to bottom.
+
+        Starred hosts, then the row that opens the rest, then the rest when it
+        is open. One function so the shape comparison and the widget build
+        cannot drift apart -- they walked the same list twice before, and that
+        is the sort of thing that silently stops matching.
+
+        A filter opens the rest for as long as it is typed: hiding a server
+        you are actively searching for would be the one moment the whole
+        arrangement is wrong.
+        """
+        rest = [h for h in self.order if h not in self.starred]
+        out: list[tuple[str, str]] = [("host", h) for h in self.order
+                                      if h in self.starred]
+        if rest:
+            out.append(("rest", ""))
+            box = getattr(self, "filter", None)
+            if self.showing_rest or (box is not None and box.get_text().strip()):
+                out.extend(("host", h) for h in rest)
+        return out
 
     def render(self) -> None:
         """Bring the sidebar up to date, rebuilding it only if it has to.
@@ -1589,14 +1702,24 @@ class Conn(Gtk.ApplicationWindow):
         waiting = 0
         busy = 0
         slots = []
+        # Counted across every host, starred or not. An unstarred server is
+        # quieter, not unwatched, and a count that ignored half the fleet
+        # would make the one number worth reading a lie.
         for host in self.order:
-            shape.append(("host", host, self.rows[host]["state"]))
             for session in self.rows[host]["sessions"]:
                 if session["agent"]["state"] in (agent_state.NEEDS_YOU,
                                                  agent_state.DRAFT):
                     waiting += 1
                 elif session["agent"]["state"] == agent_state.WORKING:
                     busy += 1
+
+        rest = [h for h in self.order if h not in self.starred]
+        for kind, host in self.listed():
+            if kind == "rest":
+                shape.append(("rest", len(rest), self.showing_rest))
+                continue
+            shape.append(("host", host, self.rows[host]["state"]))
+            for session in self.rows[host]["sessions"]:
                 slots.append((host, session["name"]))
                 shape.append(("session", host, session["name"]))
 
@@ -1650,7 +1773,10 @@ class Conn(Gtk.ApplicationWindow):
         self.widgets.clear()
 
         slot = 0
-        for host in self.order:
+        for kind, host in self.listed():
+            if kind == "rest":
+                self.list.append(self._rest_row(len(rest)))
+                continue
             self.list.append(self._host_row(host, self.rows[host]))
             for session in self.rows[host]["sessions"]:
                 slot += 1
@@ -1781,9 +1907,14 @@ class Conn(Gtk.ApplicationWindow):
             return needle in getattr(row, "host", "").lower()
         return needle in key[0].lower() or needle in key[1].lower()
 
+    def refilter(self) -> None:
+        self.shape = []
+        self.render()
+        self.list.invalidate_filter()
+
     def clear_filter(self) -> None:
         self.filter.set_text("")
-        self.list.invalidate_filter()
+        self.refilter()
         self.list.grab_focus()
 
     def _host_row(self, host: str, data: dict) -> Gtk.ListBoxRow:
@@ -1818,6 +1949,28 @@ class Conn(Gtk.ApplicationWindow):
                      lambda _g, _n, x, y, r=row, h=host: self.host_menu(r, h, x, y))
         row.add_controller(menu)
 
+        row.set_child(box)
+        return row
+
+    def _rest_row(self, count: int) -> Gtk.ListBoxRow:
+        """The one line standing in for every server you have not starred.
+
+        It carries a host attribute of "" so the filter drops it: it is
+        furniture, and a search for "trak" should not turn it up.
+        """
+        row = Gtk.ListBoxRow()
+        row.rest = True
+        row.host = ""
+        box = Gtk.Box(spacing=8)
+        arrow = Gtk.Label(label="v" if self.showing_rest else ">")
+        arrow.add_css_class("slot")
+        arrow.set_size_request(14, -1)
+        box.append(arrow)
+        label = Gtk.Label(
+            label=f"{count} more server" + ("s" if count != 1 else ""),
+            xalign=0)
+        label.add_css_class("host")
+        box.append(label)
         row.set_child(box)
         return row
 
@@ -1890,6 +2043,11 @@ class Conn(Gtk.ApplicationWindow):
     # -- opening one -------------------------------------------------------
 
     def row_activated(self, _list, row) -> None:
+        if getattr(row, "rest", False):
+            self.showing_rest = not self.showing_rest
+            self.shape = []         # the list changes shape, so rebuild it
+            self.render()
+            return
         key = getattr(row, "key", None)
         if key is None:
             return
@@ -1903,6 +2061,12 @@ class Conn(Gtk.ApplicationWindow):
         number used to move the terminal and leave the highlight behind.
         """
         key = (host, name)
+        # A notification can send you to a server that is not starred, and a
+        # view whose row is folded away has nothing for the list to highlight.
+        if host not in self.starred and not self.showing_rest:
+            self.showing_rest = True
+            self.shape = []
+            self.render()
         if key in self.open:
             self.show(self.open[key])
             return
@@ -1962,11 +2126,24 @@ class Conn(Gtk.ApplicationWindow):
     def check_source(self) -> None:
         self.updated.set_visible(source_stamp() > self.stamp)
 
-    def sweep(self) -> None:
+    def sweep(self, force: bool = False) -> None:
+        """Probe the starred every time; the rest on a long timer.
+
+        Forty servers probed every 45 seconds is forty ssh connections every
+        45 seconds, which is the real ceiling on how many this can hold --
+        not screen space. The unstarred are still probed, so one of them
+        going to needs-you still reaches you; it just takes minutes instead
+        of seconds, which is the deal you make by not starring it.
+        """
         self.check_source()
+        now = time.monotonic()
         for host in self.order:
             if host in self.inflight:
                 continue
+            if not (force or host in self.starred
+                    or now - self.probed.get(host, 0.0) >= SLOW_REFRESH):
+                continue
+            self.probed[host] = now
             self.inflight.add(host)
             threading.Thread(target=self._probe, args=(host,),
                              name=f"probe-{host}", daemon=True).start()

@@ -557,6 +557,62 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
         finally:
             hosts.SSH_CONFIG = was
 
+    # -- starring: the few you actually work on -----------------------------
+    # Against a state file of our own, or the run would rewrite yours.
+    with _tempfile.TemporaryDirectory() as tmp:
+        was, gui.STARS_STATE = gui.STARS_STATE, Path(tmp) / "starred"
+        try:
+            window.load_hosts(connect=False)
+            check("a first run stars every server you already had",
+                  window.starred == set(window.order),
+                  f"starred={window.starred}")
+            check("and writes that down", gui.STARS_STATE.exists())
+
+            live = next(s for s in window.rows["local"]["sessions"]
+                        if s["name"] == beta[1])
+            live["agent"] = dict(live["agent"], state=agent_state.NEEDS_YOU,
+                                 label="needs you", detail="")
+            window.toggle_star("local")
+            check("unstarring takes a server out of the top list",
+                  "local" not in window.starred, f"starred={window.starred}")
+            check("and its sessions go with it",
+                  row_for(window, beta) is None)
+            check("but it is still counted -- unstarred is quieter, "
+                  "not unwatched",
+                  window.alert == agent_state.NEEDS_YOU,
+                  f"alert={window.alert}")
+
+            rest = [r for r in rows(window) if getattr(r, "rest", False)]
+            check("one row stands in for everything unstarred", len(rest) == 1,
+                  f"rest rows={len(rest)}")
+            check("and the filter does not turn that row up",
+                  not window.matches(rest[0]) if window.filter.get_text()
+                  else True)
+
+            window.row_activated(window.list, rest[0])
+            check("clicking it brings them back",
+                  row_for(window, beta) is not None)
+            again = [r for r in rows(window) if getattr(r, "rest", False)]
+            window.row_activated(window.list, again[0])
+            check("and clicking it again folds them away",
+                  row_for(window, beta) is None)
+
+            window.filter.set_text(beta[1])
+            window.refilter()       # GTK debounces search-changed; this is it
+            check("a search turns up an unstarred server anyway",
+                  row_for(window, beta) is not None,
+                  "hiding what you are searching for is the one moment "
+                  "this arrangement would be wrong")
+            window.clear_filter()
+
+            window.toggle_star("local")
+            check("starring it again puts it back at the top",
+                  "local" in window.starred
+                  and row_for(window, beta) is not None)
+        finally:
+            gui.STARS_STATE = was
+            window.load_hosts(connect=False)
+
     hosts.secret_store("conntest-host", "db", "pa55w0rd")
     check("a secret goes into the keyring",
           hosts.secret_names("conntest-host") == ["db"])
