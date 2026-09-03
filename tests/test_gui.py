@@ -284,6 +284,16 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
           {"list-add-symbolic", "network-server-symbolic",
            "view-refresh-symbolic", "window-close-symbolic"} <= set(icons),
           f"icons={icons}")
+    # -- one window, however the app is reached -----------------------------
+    # A notification click arrives while conn is unfocused, which is exactly
+    # when GtkApplication reports no active window at all. Reaching for that
+    # built a second window every time, presented it, and opened the session
+    # in the one you were not looking at.
+    app = window.get_application()
+    check("the app reuses the window it already has",
+          gui.ConnApp.window(app) is window,
+          "a second window is what a notification click used to open")
+
     # -- the sidebar has to survive its own footer -------------------------
     side = window.get_child().get_first_child()
     window.updated.set_visible(True)

@@ -2354,12 +2354,26 @@ class ConnApp(Gtk.Application):
         when there was no window was why clicking did nothing at all.
         """
         host, _, name = target.get_string().partition("\t")
-        window = self.props.active_window or Conn(self)
+        window = self.window()
         window.present()
         window.open_session(host, name)
 
+    def window(self) -> "Conn":
+        """The window -- the existing one, or a new one if there is none.
+
+        Not active_window. GtkApplication reports that as None whenever none
+        of its windows has focus, which is exactly the state you are in when
+        you click a notification: you were somewhere else, that is why it was
+        sent. So the old code built a *second* window every time, presented
+        it, and opened the session in that one -- the app appeared to come up
+        and then not go anywhere, because the session did open, in a window
+        that was not the one you had.
+        """
+        windows = self.get_windows()
+        return windows[0] if windows else Conn(self)
+
     def do_activate(self):
-        window = self.props.active_window or Conn(self)
+        window = self.window()
         window.present()
 
 
