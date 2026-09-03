@@ -661,6 +661,26 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
             gui.STARS_STATE = was
             window.load_hosts(connect=False)
 
+    # -- mountpoints that outlived their mount -----------------------------
+    with _tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "mnt"
+        root.mkdir()
+        (root / "stale").mkdir()
+        keeper = root / "has-files"
+        keeper.mkdir()
+        (keeper / "notes.txt").write_text("written while unmounted")
+        was, hosts.MNT_ROOT = hosts.MNT_ROOT, root
+        try:
+            gone = hosts.tidy_mounts()
+            check("an empty mountpoint is taken away", gone == ["stale"],
+                  f"removed={gone}")
+            check("and one with anything in it is left alone",
+                  keeper.exists() and (keeper / "notes.txt").exists(),
+                  "rmdir cannot remove a directory with files in it, which is "
+                  "the whole reason this is safe to run at startup")
+        finally:
+            hosts.MNT_ROOT = was
+
     hosts.secret_store("conntest-host", "db", "pa55w0rd")
     check("a secret goes into the keyring",
           hosts.secret_names("conntest-host") == ["db"])

@@ -479,6 +479,10 @@ class Conn(Gtk.ApplicationWindow):
         # The ssh is held back until check_agent() says there is a key to
         # ride, so a fresh boot does not put up one passphrase prompt per
         # connection. See connect_hosts().
+        # Once, at startup. A mountpoint with nothing on it is left by a
+        # failed mount or by a reboot, and it looks like a mount that worked.
+        hosts.tidy_mounts()
+
         self.holding = True
         self.load_hosts(connect=False)
         self.check_agent()
@@ -1112,6 +1116,16 @@ class Conn(Gtk.ApplicationWindow):
         except (hosts.HostError, OSError) as exc:
             self.complain(f"Could not forget {host}", str(exc))
             return
+
+        # A server you have forgotten should not keep a folder in ~/mnt. If it
+        # is mounted, unmount first -- ssh-mount takes the directory with it --
+        # and tidy up after either way.
+        if not hosts.is_local(host) and hosts.is_mounted(host):
+            try:
+                hosts.unmount(host)
+            except (hosts.HostError, OSError):
+                pass    # still busy; tidy_mounts() will get it another day
+        hosts.tidy_mounts()
 
         cleared = 0
         if passwords:

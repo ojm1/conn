@@ -46,12 +46,29 @@ if mountpoint -q "$mnt"; then
 fi
 
 mkdir -p "$mnt"
-sshfs "$host:$remote" "$mnt" \
+
+# sshfs's exit status was not being read, so a refused host printed "mounted"
+# and exited 0 -- which conn took at face value -- and left behind the empty
+# directory made a line above. An empty ~/mnt/<host> is indistinguishable
+# from a mount that worked until you look inside it.
+if ! err=$(sshfs "$host:$remote" "$mnt" \
   -o reconnect \
   -o ServerAliveInterval=15 \
   -o ServerAliveCountMax=3 \
   -o follow_symlinks \
   -o idmap=user \
-  -o dir_cache=yes
+  -o dir_cache=yes 2>&1); then
+  rmdir "$mnt" 2>/dev/null
+  echo "could not mount $host: ${err:-sshfs failed}" >&2
+  exit 1
+fi
+
+# And it can succeed without mounting anything: sshfs forks, and the parent
+# has been known to return before the child has given up.
+if ! mountpoint -q "$mnt"; then
+  rmdir "$mnt" 2>/dev/null
+  echo "could not mount $host: sshfs returned 0 but nothing is mounted" >&2
+  exit 1
+fi
 
 echo "mounted $host:${remote:-~} at $mnt"

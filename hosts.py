@@ -516,6 +516,35 @@ def unmount(host: str) -> None:
         raise HostError((done.stderr or done.stdout or "unmount failed").strip().splitlines()[-1])
 
 
+def tidy_mounts() -> list[str]:
+    """Take away mountpoints with nothing mounted on them.
+
+    ~/mnt/<host> is created before sshfs runs and outlives it: a mount that
+    fails leaves the empty directory behind, and so does a reboot with one
+    still up, since no unmount ever runs to tidy it. What is left looks
+    exactly like a mount that worked until you open it.
+
+    rmdir only ever removes an empty directory, so this cannot take anything
+    with it. If files were written into a mountpoint while it was unmounted --
+    the one case where this would be destructive -- the directory is not empty
+    and is left exactly where it is.
+    """
+    gone: list[str] = []
+    try:
+        entries = sorted(MNT_ROOT.iterdir())
+    except OSError:
+        return gone
+    for path in entries:
+        try:
+            if not path.is_dir() or os.path.ismount(path):
+                continue
+            path.rmdir()
+            gone.append(path.name)
+        except OSError:
+            continue        # in use, not empty, or not ours to remove
+    return gone
+
+
 def open_files(path: str) -> None:
     subprocess.Popen(["xdg-open", path],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
