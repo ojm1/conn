@@ -2322,6 +2322,29 @@ class ConnApp(Gtk.Application):
         action.connect("activate", self.open_from_notification)
         self.add_action(action)
 
+        # `conn --notify` asks for this over D-Bus. It has to be the running
+        # instance that sends: GLib's freedesktop backend delivers a click
+        # back to the process that sent the notification, so one sent by a
+        # command that then exits can never be clicked.
+        sample = Gio.SimpleAction.new("notify-test", None)
+        sample.connect("activate", lambda *_: self.send_sample_notification())
+        self.add_action(sample)
+
+    def send_sample_notification(self) -> None:
+        """One notification about a real session, for looking at."""
+        row = hosts.probe(hosts.LOCAL)
+        sessions = row.get("sessions") or []
+        if not sessions:
+            return
+        # Prefer one actually waiting on you: that is the notification worth
+        # seeing, and the only kind that goes out at HIGH.
+        session = next((s for s in sessions
+                        if s["agent"]["state"] in (agent_state.NEEDS_YOU,
+                                                   agent_state.DRAFT)),
+                       sessions[0])
+        self.send_notification(f"conn-{hosts.LOCAL}-{session['name']}",
+                               notification(hosts.LOCAL, session))
+
     def open_from_notification(self, _action, target):
         """Open the session a notification was about.
 
@@ -2345,34 +2368,28 @@ def run() -> int:
 
 
 def send_test_notification() -> int:
-    """Fire one notification, at a real session, and stop.
+    """Ask the running conn to send one, and let it own the click.
 
-    There is no other way to look at one on purpose: the states that send them
-    arrive when they arrive. This goes down the same path the panel does --
-    same app id, same icon, same default action -- so what you see and what
-    happens when you click it are what the real thing does, including the case
-    that was broken, where the click has to start the app from cold.
+    Not sent from here. GLib's freedesktop backend -- which is what is in use,
+    there being no org.gtk.Notifications on this session -- routes a click
+    back to the application that sent the notification, so one sent by a
+    command that exits a moment later is dead on arrival. The daemon has
+    nothing to deliver to and the click does nothing at all, which is exactly
+    what it looked like.
+
+    So this activates an action on the app instead. org.freedesktop.Application
+    is what DBusActivatable=true in the desktop entry provides, which means it
+    starts conn if conn is not already running.
     """
-    row = hosts.probe(hosts.LOCAL)
-    sessions = row.get("sessions") or []
-    if not sessions:
-        print("no local tmux session to point a notification at", file=sys.stderr)
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        bus.call_sync(
+            APP_ID, "/" + APP_ID.replace(".", "/"),
+            "org.freedesktop.Application", "ActivateAction",
+            GLib.Variant("(sava{sv})", ("notify-test", [], {})),
+            None, Gio.DBusCallFlags.NONE, -1, None)
+    except GLib.Error as exc:
+        print(f"could not reach conn: {exc.message}", file=sys.stderr)
         return 1
-    # Prefer one that is actually waiting on you: that is the notification
-    # worth looking at, and the only one that goes out at HIGH.
-    session = next((s for s in sessions
-                    if s["agent"]["state"] in (agent_state.NEEDS_YOU,
-                                               agent_state.DRAFT)),
-                   sessions[0])
-
-    # Non-unique on purpose. A second conn is a *remote* instance, and GLib
-    # refuses to send a notification from one of those -- so this one declines
-    # to be the primary instead of arguing with it. The notification still
-    # carries the real application id, which is what the click is routed by.
-    app = ConnApp()
-    app.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
-    app.register(None)
-    app.send_notification(f"conn-{hosts.LOCAL}-{session['name']}",
-                          notification(hosts.LOCAL, session))
-    print(f"sent -- clicking it opens {hosts.LOCAL}/{session['name']}")
+    print("asked conn to send one -- click it to prove the round trip")
     return 0

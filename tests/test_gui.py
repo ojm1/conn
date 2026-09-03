@@ -205,6 +205,17 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
           window.widgets[alpha]["mark"].get_label() == "!")
 
     # -- the condition of the whole fleet, in one bar -----------------------
+    # The bar sums over every session on the machine, including whatever you
+    # happen to be running right now, so the fleet is quieted first. Without
+    # this the check passes or fails depending on what is busy in another
+    # window, which is not a property of the code.
+    for other in window.order:
+        for quiet in window.rows[other]["sessions"]:
+            quiet["agent"] = dict(quiet["agent"], state=agent_state.READY,
+                                  label="idle", detail="")
+    session["agent"] = dict(session["agent"], state=agent_state.NEEDS_YOU,
+                            label="needs you", detail="Do you want to")
+    window.render()
     check("one session waiting puts the fleet at red alert",
           window.alert == agent_state.NEEDS_YOU, f"alert={window.alert}")
     session["agent"] = dict(session["agent"], state=agent_state.WORKING,
