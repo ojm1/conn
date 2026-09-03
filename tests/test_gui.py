@@ -401,6 +401,19 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     check("and a way to check it again, for one that came back down",
           any("Check again" in (label or "") for label in on_host),
           f"menu={on_host}")
+    # "local" is invented when the config has no such entry, so there is no
+    # line to take out and the menu must not offer to.
+    check("and no offer to forget a host the config never named",
+          any("Forget" in (label or "") for label in on_host)
+          == ("local" in hosts.config_hosts()),
+          f"menu={on_host}")
+    named = [h for h in hosts.config_hosts()]
+    if named:
+        on_named = menu_items(window.host_menu, row_for(window, alpha),
+                              named[0], 0, 0)
+        check("but one that is in ~/.ssh/config can be forgotten",
+              any(f"Forget {named[0]}" in (label or "") for label in on_named),
+              f"menu={on_named}")
 
     # -- the new-session dialog names the host it is about ----------------
     def dialog_labels():
@@ -505,6 +518,45 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
           hosts.screen_links("a" * 130 + "\n" + "b" * 130 + "\n") == [])
 
     # -- secrets -----------------------------------------------------------
+    # -- forgetting a server ------------------------------------------------
+    # Against a config of our own: the real one is not a fixture, and this
+    # rewrites the file it is pointed at.
+    import tempfile as _tempfile
+    with _tempfile.TemporaryDirectory() as tmp:
+        conf = Path(tmp) / "config"
+        conf.write_text("Host alpha\n    HostName a.example\n"
+                        "\n"
+                        "Host beta gamma\n    HostName b.example\n"
+                        "\n"
+                        "# The defaults, which must stay last\n"
+                        "Host *\n    ServerAliveInterval 30\n")
+        was, hosts.SSH_CONFIG = hosts.SSH_CONFIG, conf
+        try:
+            backup = hosts.remove_host("alpha")
+            left = conf.read_text()
+            check("forgetting a server takes its whole block",
+                  "alpha" not in left and "a.example" not in left, left)
+            check("and keeps the old file beside it", backup.exists())
+            check("and leaves every other block alone",
+                  "Host beta gamma" in left and "Host *" in left, left)
+            check("and does not eat the comment introducing the next block",
+                  "# The defaults" in left, left)
+
+            hosts.remove_host("gamma")
+            left = conf.read_text()
+            check("a name sharing a Host line is dropped from the line, "
+                  "not the block",
+                  "Host beta\n" in left and "b.example" in left, left)
+
+            try:
+                hosts.remove_host("nope")
+                said = False
+            except hosts.HostError:
+                said = True
+            check("and forgetting one that was never there says so", said)
+        finally:
+            hosts.SSH_CONFIG = was
+
     hosts.secret_store("conntest-host", "db", "pa55w0rd")
     check("a secret goes into the keyring",
           hosts.secret_names("conntest-host") == ["db"])

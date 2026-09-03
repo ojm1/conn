@@ -223,6 +223,88 @@ def add_host(name: str, hostname: str, user: str, port: str = "22") -> Path:
     return backup
 
 
+def config_hosts() -> list[str]:
+    """Only the aliases the file actually names.
+
+    list_hosts() invents "local" when the config has no such entry, which is
+    right for the panel and wrong for anything that edits the file: you cannot
+    remove a line that was never written.
+    """
+    try:
+        text = SSH_CONFIG.read_text()
+    except OSError:
+        return []
+    names: list[str] = []
+    for line in text.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[0].lower() == "host":
+            for name in parts[1:]:
+                if not re.search(r"[*?!]", name) and name not in names:
+                    names.append(name)
+    return names
+
+
+def remove_host(name: str) -> Path:
+    """Take a Host block back out of ~/.ssh/config.
+
+    The counterpart add_host() never had, so every server the panel ever added
+    was permanent as far as it was concerned.
+
+    A Host line may name several aliases. Dropping one of those is an edit to
+    that line, not the removal of a block the other names still depend on --
+    deleting it wholesale would quietly take unrelated servers with it.
+    """
+    name = name.strip()
+    if not name or re.search(r"[*?!\s]", name):
+        raise HostError("Name must be a single word with no * ? or spaces.")
+
+    try:
+        lines = SSH_CONFIG.read_text().splitlines()
+    except OSError as exc:
+        raise HostError(f"Cannot read ~/.ssh/config: {exc}") from exc
+
+    def aliases(line: str) -> list[str] | None:
+        parts = line.strip().split()
+        if len(parts) >= 2 and parts[0].lower() == "host":
+            return parts[1:]
+        return None
+
+    start = None
+    for index, line in enumerate(lines):
+        named = aliases(line)
+        if named and name in named:
+            start = index
+            break
+    if start is None:
+        raise HostError(f"'{name}' is not in ~/.ssh/config.")
+
+    backup = backup_config()
+    shared = [n for n in aliases(lines[start]) if n != name]
+
+    if shared:
+        lines[start] = "Host " + " ".join(shared)
+    else:
+        end = start + 1
+        while end < len(lines) and aliases(lines[end]) is None:
+            end += 1
+        # Blank lines and comments sitting directly above the next block
+        # introduce it, not us -- add_host() walks over the same banner going
+        # the other way. Leave them with the block they belong to.
+        while end > start + 1:
+            above = lines[end - 1].strip()
+            if above and not above.startswith("#"):
+                break
+            end -= 1
+        # The blank line above ours is the separator add_host() wrote.
+        while start > 0 and not lines[start - 1].strip():
+            start -= 1
+        del lines[start:end]
+
+    SSH_CONFIG.write_text("\n".join(lines).rstrip("\n") + "\n")
+    SSH_CONFIG.chmod(0o600)
+    return backup
+
+
 # ---------------------------------------------------------------------------
 # Probing a live host
 # ---------------------------------------------------------------------------

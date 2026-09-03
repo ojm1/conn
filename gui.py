@@ -520,7 +520,8 @@ class Conn(Gtk.ApplicationWindow):
             ("mouse", ""),
             ("ctrl-click", "open a link in a session"),
             ("right-click a session", "open it, rename it, or kill it"),
-            ("right-click a host", "check it again, new session, files, passwords"),
+            ("right-click a host",
+             "check it again, new session, files, passwords, forget it"),
             ("right-click the screen", "copy, paste, and every link on it"),
             ("hover a session", "the bin at the end of the row kills it"),
             ("+ / server icon", "new session here / add a host to ~/.ssh/config"),
@@ -638,6 +639,9 @@ class Conn(Gtk.ApplicationWindow):
                           lambda: self.do_mount(host, True), False))
             items.append(("Install my key (ssh-copy-id)",
                           lambda: self.install_key(host), False))
+        if host in hosts.config_hosts():
+            items.append((f"Forget {host}...",
+                          lambda: self.confirm_forget(host), True))
         self.popup(row, x, y, items)
 
     def recheck(self, host: str) -> None:
@@ -941,6 +945,87 @@ class Conn(Gtk.ApplicationWindow):
         self.drafts.pop((host, was), None)
         self.sweep()
         return GLib.SOURCE_REMOVE
+
+    def confirm_forget(self, host: str) -> None:
+        """Ask before editing ~/.ssh/config, and offer to take the passwords
+        with it.
+
+        Leaving a keyring entry behind for a server that no longer exists is
+        how you end up with secrets you cannot place a year later, so the
+        offer is made here rather than left as a second errand. It is a
+        separate button rather than a checkbox because GTK's alert dialog has
+        no room for one, and three plain choices read better than a form.
+        """
+        try:
+            secrets = hosts.secret_names(host)
+        except (hosts.HostError, OSError):
+            secrets = []
+
+        buttons = ["Cancel", "Forget server"]
+        if secrets:
+            buttons.append(f"Forget server and {len(secrets)} password"
+                           + ("s" if len(secrets) > 1 else ""))
+
+        dialog = Gtk.AlertDialog()
+        dialog.set_message(f"Forget {host}?")
+        dialog.set_detail(
+            "The Host block comes out of ~/.ssh/config and the server leaves "
+            "the list. Nothing on the server itself is touched, and the old "
+            "config is kept as a backup beside it.")
+        dialog.set_buttons(buttons)
+        dialog.set_cancel_button(0)
+        dialog.set_default_button(0)
+
+        def answered(source, result):
+            try:
+                choice = source.choose_finish(result)
+            except GLib.Error:
+                return
+            if choice >= 1:
+                self.forget_host(host, passwords=choice == 2)
+
+        dialog.choose(self, None, answered)
+
+    def forget_host(self, host: str, passwords: bool = False) -> None:
+        """Remove a server, and everything this window was holding for it."""
+        try:
+            backup = hosts.remove_host(host)
+        except (hosts.HostError, OSError) as exc:
+            self.complain(f"Could not forget {host}", str(exc))
+            return
+
+        cleared = 0
+        if passwords:
+            for name in hosts.secret_names(host):
+                try:
+                    hosts.secret_clear(host, name)
+                    cleared += 1
+                except (hosts.HostError, OSError):
+                    pass    # one stubborn entry is not worth losing the rest
+
+        # The views for it go too. The tmux sessions on the far side keep
+        # running -- forgetting a server is not killing anything on it -- but
+        # a terminal pointed at a host the config no longer knows cannot
+        # reconnect, and a view with no row is how the list and the stack get
+        # out of step.
+        for key in [k for k in self.open if k[0] == host]:
+            self.close_session(self.open[key])
+
+        proc = self.watchers.pop(host, None)
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        self.watched.discard(host)
+        self.rows.pop(host, None)
+        self.inflight.discard(host)
+
+        self.load_hosts()
+        said = f"forgot {host}"
+        if cleared:
+            said += f" and {cleared} password" + ("s" if cleared > 1 else "")
+        self.notice(f"{said} -- old config kept at {backup.name}")
 
     def prompt_add_host(self) -> None:
         def add(values):
