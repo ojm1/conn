@@ -515,6 +515,10 @@ class Conn(Gtk.ApplicationWindow):
         split.set_end_child(self.stack)
         split.set_position(300)
         split.set_resize_start_child(False)
+        # And it cannot be dragged narrower than it can draw itself. GTK lets
+        # a Paned shrink a child past its minimum by default, which is the
+        # other way the sidebar ends up clipped.
+        split.set_shrink_start_child(False)
         self.set_child(split)
 
     def _guide(self) -> Gtk.Popover:
@@ -1475,10 +1479,25 @@ class Conn(Gtk.ApplicationWindow):
 
     def _footer(self) -> Gtk.Widget:
         """Help sits at the bottom of the list, where it is out of the way
-        until the moment you want it."""
-        bar = Gtk.Box(spacing=6, margin_top=6, margin_bottom=8,
-                      margin_start=10, margin_end=10)
-        bar.add_css_class("footer")
+        until the moment you want it.
+
+        Two rows rather than one, because the two buttons below are conditional
+        and long. Sharing a line with the host count, they pushed the sidebar's
+        *minimum* width to 453px against a 300px pane -- and a box that cannot
+        have its minimum is drawn clipped, which is why the list sometimes
+        appeared with its left edge cut off. It only happened when one of them
+        was showing, which is what made it look random.
+
+        Their own row also suits them better: a restart notice is worth the
+        full width, not a squeeze between a count and a close button.
+        """
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
+                        margin_top=6, margin_bottom=8,
+                        margin_start=10, margin_end=10)
+        outer.add_css_class("footer")
+
+        notices = Gtk.Box(spacing=6)
+        bar = Gtk.Box(spacing=6)
 
         self.help_button = Gtk.MenuButton(label="?")
         self.help_button.add_css_class("help")
@@ -1490,6 +1509,11 @@ class Conn(Gtk.ApplicationWindow):
         self.footnote = Gtk.Label(label="", xalign=0)
         self.footnote.add_css_class("detail")
         self.footnote.set_hexpand(True)
+        # A label demands room for every character it holds unless told it may
+        # give some back. This one carries a host count and, for a few seconds
+        # at a time, whatever the window last did.
+        self.footnote.set_ellipsize(Pango.EllipsizeMode.END)
+        self.footnote.set_max_width_chars(12)
         bar.append(self.footnote)
 
         # Shown only once a newer conn has been copied over this one. There
@@ -1502,7 +1526,8 @@ class Conn(Gtk.ApplicationWindow):
             "are tmux and survive it; the views close and reopen.")
         self.updated.set_visible(False)
         self.updated.connect("clicked", lambda _b: self.restart())
-        bar.append(self.updated)
+        self.updated.set_hexpand(True)
+        notices.append(self.updated)
 
         # Shown only when there is nothing to unlock it with. A padlock that
         # is always there stops being read.
@@ -1514,7 +1539,8 @@ class Conn(Gtk.ApplicationWindow):
             "never through conn.")
         self.unlock.set_visible(False)
         self.unlock.connect("clicked", lambda _b: self.do_unlock())
-        bar.append(self.unlock)
+        self.unlock.set_hexpand(True)
+        notices.append(self.unlock)
 
         # The one thing genuinely lost with the title bar. Down here it is
         # still there fullscreen, which is where it went missing before.
@@ -1523,7 +1549,10 @@ class Conn(Gtk.ApplicationWindow):
         shut.set_tooltip_text("Close conn (ctrl-q). Sessions keep running.")
         shut.connect("clicked", lambda _b: self.close())
         bar.append(shut)
-        return bar
+
+        outer.append(notices)
+        outer.append(bar)
+        return outer
 
     def do_unlock(self) -> None:
         hosts.unlock_agent()

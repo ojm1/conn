@@ -273,6 +273,18 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
           {"list-add-symbolic", "network-server-symbolic",
            "view-refresh-symbolic", "window-close-symbolic"} <= set(icons),
           f"icons={icons}")
+    # -- the sidebar has to survive its own footer -------------------------
+    side = window.get_child().get_start_child()
+    window.updated.set_visible(True)
+    window.unlock.set_visible(True)
+    smallest, _ = side.get_preferred_size()
+    check("the sidebar still fits when the footer buttons appear",
+          smallest.width <= 300,
+          f"minimum={smallest.width}px against a 300px pane -- a sidebar that "
+          "cannot fit its own minimum is drawn clipped")
+    window.updated.set_visible(False)
+    window.unlock.set_visible(False)
+
     check("there is no title bar to lose them with",
           window.get_titlebar() is None and not window.get_decorated())
 
