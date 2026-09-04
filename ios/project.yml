@@ -1,0 +1,38 @@
+# XcodeGen keeps the project as text, which matters here: the desktop half of
+# conn is developed on Linux, where an .xcodeproj cannot be opened, let alone
+# edited. Regenerate with `xcodegen` after changing this file.
+name: Conn
+options:
+  bundleIdPrefix: com.ojm
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: 1.2.0
+  Citadel:
+    url: https://github.com/orlandos-nl/Citadel
+    from: 0.7.0
+
+targets:
+  Conn:
+    type: application
+    platform: iOS
+    sources:
+      - path: Conn
+    dependencies:
+      - package: SwiftTerm
+      - package: Citadel
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ojm.conn
+        MARKETING_VERSION: "0.1"
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: >-
+          UIInterfaceOrientationPortrait
+          UIInterfaceOrientationLandscapeLeft
+          UIInterfaceOrientationLandscapeRight
+        SWIFT_VERSION: "5.9"

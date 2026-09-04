@@ -1,0 +1,6 @@
+# Generated from project.yml -- never edited by hand, never committed.
+Conn.xcodeproj/
+.build/
+DerivedData/
+# Your host, your key. Copy Spike.example.swift to Spike.swift and fill it in.
+Conn/Spike.swift
