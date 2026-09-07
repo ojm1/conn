@@ -483,15 +483,38 @@ def _gib(megabytes: str) -> str:
 # Actions
 # ---------------------------------------------------------------------------
 
+def _in_mounts_table(path: Path) -> bool:
+    """Whether the kernel lists `path` as a mountpoint.
+
+    Deliberately not os.path.ismount(): that stats the path, and a stat on a
+    FUSE mount whose sshfs has hung blocks indefinitely -- on the main thread
+    that froze the whole window. It also answers wrongly for an sshfs that
+    died: the stat fails with ENOTCONN and ismount says False, yet the mount
+    is still held and unmounting is the one thing left to do with it. The
+    table has neither problem: reading it never enters the filesystem, and a
+    dead mount stays listed until it is released.
+    """
+    # The table octal-escapes space, tab, newline and backslash, so the
+    # comparison is made in its terms.
+    wanted = (str(path).replace("\\", "\\134").replace(" ", "\\040")
+              .replace("\t", "\\011").replace("\n", "\\012"))
+    try:
+        with open("/proc/self/mounts") as table:
+            for line in table:
+                fields = line.split()
+                if len(fields) > 1 and fields[1] == wanted:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 def is_mounted(host: str) -> bool:
     # This machine's files are already here, which is the state "mounted"
     # exists to describe, so f opens them and u has nothing to undo.
     if is_local(host):
         return True
-    try:
-        return os.path.ismount(MNT_ROOT / host)
-    except OSError:
-        return False
+    return _in_mounts_table(MNT_ROOT / host)
 
 
 def files_root(host: str) -> Path:
@@ -542,8 +565,12 @@ def tidy_mounts() -> list[str]:
     except OSError:
         return gone
     for path in entries:
+        # Table first: anything mounted -- alive, dead or hung -- is skipped
+        # before a stat can touch it, so what remains stats plain tmpfs.
+        if _in_mounts_table(path):
+            continue
         try:
-            if not path.is_dir() or os.path.ismount(path):
+            if not path.is_dir():
                 continue
             path.rmdir()
             gone.append(path.name)

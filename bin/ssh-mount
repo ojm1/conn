@@ -13,6 +13,14 @@ set -uo pipefail
 
 root="${XDG_RUNTIME_DIR:-$HOME/.cache}/conn/mnt"
 
+# Whether the kernel's mount table lists $1. Not mountpoint(1): that stats
+# the path, which hangs on a hung sshfs and says "not mounted" for a dead one
+# (Transport endpoint is not connected) -- the dead mount being exactly the
+# one -u must still release.
+listed() {
+  awk -v mnt="$1" '$2 == mnt { found = 1 } END { exit !found }' /proc/self/mounts
+}
+
 if ! command -v sshfs >/dev/null 2>&1; then
   echo "sshfs is not installed. Install it with:  omarchy pkg add sshfs"
   exit 1
@@ -22,7 +30,7 @@ if [[ ${1:-} == "-u" || ${1:-} == "--unmount" ]]; then
   host=${2:?usage: ssh-mount -u <host>}
   mnt="$root/$host"
 
-  if ! mountpoint -q "$mnt"; then
+  if ! listed "$mnt"; then
     echo "not mounted: $mnt"
     rmdir "$mnt" 2>/dev/null
     exit 0
@@ -47,9 +55,15 @@ host=${1:?usage: ssh-mount <host> [remote-path]}
 remote=${2:-}
 mnt="$root/$host"
 
-if mountpoint -q "$mnt"; then
-  echo "already mounted: $mnt"
-  exit 0
+if listed "$mnt"; then
+  if mountpoint -q "$mnt"; then
+    echo "already mounted: $mnt"
+    exit 0
+  fi
+  # In the table but not answering: the sshfs behind it died and left the
+  # mountpoint wedged. Nothing can be mounted over it until it is released,
+  # and fusermount3 works on a dead mount where everything else fails.
+  fusermount3 -u "$mnt" 2>/dev/null || fusermount3 -uz "$mnt" 2>/dev/null
 fi
 
 mkdir -p "$mnt"
