@@ -793,15 +793,18 @@ def wait_launch_error(since: float, timeout: float = 6.0) -> str:
 #
 # The markers carry the same per-invocation token as the probe's, for the
 # same reason: a frame boundary a watched screen can print is a frame
-# boundary it can forge. The ALIVE line every ~15 ticks is the liveness the
+# boundary it can forge. The ALIVE line every tick is the liveness the
 # transport cannot give -- ServerAliveInterval is ignored when ssh is a mux
 # client riding the user's ControlMaster, so a master whose TCP has silently
 # died leaves the reader waiting on a pipe that will never speak again. The
-# heartbeat makes silence finite: a reader that has heard nothing for a few
-# beats knows the channel is dead, not idle.
+# heartbeat makes silence finite: a reader that has heard nothing for the
+# stall budget knows the channel is dead, not idle. Every tick, not every
+# few: a tick is the sleep plus the whole dump -- some twenty process spawns
+# -- so on a slow remote a multi-tick beat could outrun the reader's
+# WATCH_STALL budget and get a healthy stream killed as stalled. One printf
+# a second is nothing next to the dump it follows.
 WATCH_SCRIPT = r"""
 last=""
-beat=0
 while :; do
   out=$(tmux list-sessions -F "#{session_name}" 2>/dev/null | while read -r s; do
           printf '%s\n' "@@@__BOUND__:SESSION:$s"
@@ -814,11 +817,7 @@ while :; do
     last=$now
     printf '%s\n###__BOUND__:FRAME\n' "$out"
   fi
-  beat=$((beat+1))
-  if [ "$beat" -ge 15 ]; then
-    beat=0
-    echo "###__BOUND__:ALIVE"
-  fi
+  echo "###__BOUND__:ALIVE"
   sleep __INTERVAL__
 done
 """

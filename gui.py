@@ -83,11 +83,11 @@ WATCH_INTERVAL = 1.0     # how often the far side re-dumps a screen
 WATCH_RETRY_MIN = 3.0
 WATCH_RETRY_MAX = 300.0
 WATCH_HEALTHY = 30.0     # a stream that lasted this long was not a refusal
-# The far side heartbeats every ~15s even when idle, so this much silence is
-# a dead channel, not a quiet one. It is the liveness ServerAliveInterval
-# cannot give: a mux client riding the user's ControlMaster ignores it, and
-# a master whose TCP died without an EOF would otherwise block the reader
-# forever.
+# The far side heartbeats every tick -- a second, plus however long the dump
+# takes on a slow remote -- so this much silence is a dead channel, not a
+# quiet or a slow one. It is the liveness ServerAliveInterval cannot give: a
+# mux client riding the user's ControlMaster ignores it, and a master whose
+# TCP died without an EOF would otherwise block the reader forever.
 WATCH_STALL = 45.0
 # How long an unsent draft has to sit untouched before it is worth saying out
 # loud. Typing is a draft too -- see draft_settled().
@@ -554,6 +554,11 @@ class Conn(Gtk.ApplicationWindow):
         self.streams: dict[str, tuple[threading.Thread,
                                       threading.Event, threading.Event]] = {}
         self.watchers: dict[str, object] = {}
+        # Every watchers registration and pop happens under this lock:
+        # registering is a halt-check plus a write, and unless that pair is
+        # atomic against stop_stream's pop, a halting thread can bury its
+        # successor's entry and leave a live ssh no stop can reach.
+        self.watch_lock = threading.Lock()
         self.inflight: set[str] = set()
         self.frames: queue.Queue = queue.Queue(maxsize=256)
         self.stopping = False
@@ -2526,7 +2531,10 @@ class Conn(Gtk.ApplicationWindow):
         entry = self.streams.get(host)
         if entry is not None:
             entry[1].set()
-        proc = self.watchers.pop(host, None)
+        # Halt first, pop under the lock second: a spawn that has not
+        # registered yet will now see the halt and take itself down.
+        with self.watch_lock:
+            proc = self.watchers.pop(host, None)
         if proc is not None:
             try:
                 proc.terminate()
@@ -2550,12 +2558,18 @@ class Conn(Gtk.ApplicationWindow):
             except OSError:
                 proc = None     # spawn refused: back off like a dropped stream
             if proc is not None:
-                self.watchers[host] = proc
-                if self.stopping or halt.is_set():
+                # Check and register as one step: checked first and written
+                # after, a halt landing between the two let this thread
+                # register over its successor's entry, then identity-pop and
+                # terminate only its own process -- leaving the successor's
+                # live ssh unreachable by stop_stream.
+                with self.watch_lock:
+                    halted = self.stopping or halt.is_set()
+                    if not halted:
+                        self.watchers[host] = proc
+                if halted:
                     # Halted between spawn and registration: the stopper's
                     # pop found nothing, so this process is ours to take down.
-                    if self.watchers.get(host) is proc:
-                        self.watchers.pop(host, None)
                     try:
                         proc.terminate()
                     except Exception:
@@ -2566,11 +2580,17 @@ class Conn(Gtk.ApplicationWindow):
                 pending = b""
                 try:
                     fd = proc.stdout.fileno()
+                    # poll, not select: select raises on any fd past
+                    # FD_SETSIZE (1024), which would read as a dead stream
+                    # -- a process holding enough fds churned every watch
+                    # forever. poll has no fd-number ceiling.
+                    poller = select.poll()
+                    poller.register(fd, select.POLLIN)
                     while not (self.stopping or halt.is_set()):
                         # Bounded silence, not a blocking readline: past the
                         # heartbeat allowance the channel is dead however
                         # alive the process looks -- see WATCH_STALL.
-                        if not select.select([fd], [], [], WATCH_STALL)[0]:
+                        if not poller.poll(WATCH_STALL * 1000):
                             break
                         chunk = os.read(fd, 65536)
                         if not chunk:
@@ -2596,8 +2616,9 @@ class Conn(Gtk.ApplicationWindow):
                 finally:
                     # Only our own entry: a successor stream may already
                     # have registered its process under this host.
-                    if self.watchers.get(host) is proc:
-                        self.watchers.pop(host, None)
+                    with self.watch_lock:
+                        if self.watchers.get(host) is proc:
+                            self.watchers.pop(host, None)
                     try:
                         proc.terminate()
                     except Exception:
@@ -2655,7 +2676,9 @@ class Conn(Gtk.ApplicationWindow):
         self.stopping = True
         for _thread, halt, _poke in list(self.streams.values()):
             halt.set()
-        for proc in list(self.watchers.values()):
+        with self.watch_lock:
+            procs = list(self.watchers.values())
+        for proc in procs:
             try:
                 proc.terminate()
             except Exception:
