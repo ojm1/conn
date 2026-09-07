@@ -97,6 +97,9 @@ disk, mounts, and the session list.
 
 `CONN_NO_WATCH=1` falls back to plain polling.
 
+The far side needs only `tmux` and a POSIX `sh`: the scripts are piped to `sh` explicitly rather
+than handed to the login shell to parse, so a fish or tcsh user on the remote is fine.
+
 ## This machine, too
 
 The first host in the list is `local` -- the laptop the panel is running on. It is not ssh to

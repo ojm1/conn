@@ -76,28 +76,31 @@ def own_session() -> str:
     return _OWN_SESSION
 
 
-def run_argv(host: str, script: str, opts: list[str] | None = None,
-             stdin: bool = False) -> list[str]:
-    """argv that runs `script` on `host`.
+def run_argv(host: str, opts: list[str] | None = None) -> list[str]:
+    """argv that runs, on `host`, the script the caller then feeds to stdin.
 
     Every probe, watch and send below is POSIX shell that never mentions how it
     got there, so this is the only place that knows the difference: locally the
-    script goes to bash directly, remotely it goes to ssh. One copy of each
+    script goes to bash directly, remotely to `sh` over ssh. One copy of each
     script, two transports.
 
-    `stdin` keeps the channel open for callers that feed the script input; ssh
-    otherwise reads stdin by default and steals the panel's keystrokes, which
-    is why -n is on everywhere else.
+    The script travels on stdin rather than as ssh's command argument. The
+    argument is handed to the remote *login* shell, and a fish or tcsh user's
+    shell rejects POSIX syntax at parse time -- the host then read as down
+    with a syntax error for a tooltip. "exec sh" is the one command line every
+    shell reads the same way. Feeding stdin ourselves also keeps ssh off the
+    terminal: left attached it reads the panel's keystrokes, which is what -n
+    used to be here for. A script run this way must not read its own stdin,
+    or it eats the rest of its text.
+
+    "--" so a host name is never read as an option, whatever it starts with.
     """
     if is_local(host):
-        return ["bash", "-c", script]
+        return ["bash"]
 
-    argv = ["ssh"]
-    if not stdin:
-        argv.append("-n")
-    argv += ["-o", "BatchMode=yes", "-o", f"ConnectTimeout={CONNECT_TIMEOUT}"]
+    argv = ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={CONNECT_TIMEOUT}"]
     argv += list(opts or [])
-    return argv + [host, script]
+    return argv + ["--", host, "exec sh"]
 
 
 # ---------------------------------------------------------------------------
@@ -396,12 +399,11 @@ def probe(host: str) -> dict:
     row["mounted"] = is_mounted(host)
     row["checked"] = time.time()
 
+    script = REMOTE_PROBE.replace("__CAPLINES__", str(CAPTURE_LINES))
     try:
         done = subprocess.run(
-            run_argv(host,
-                     REMOTE_PROBE.replace("__CAPLINES__", str(CAPTURE_LINES)),
-                     opts=["-o", "StrictHostKeyChecking=accept-new"]),
-            stdin=subprocess.DEVNULL,
+            run_argv(host, opts=["-o", "StrictHostKeyChecking=accept-new"]),
+            input=script,
             capture_output=True, text=True, timeout=PROBE_TIMEOUT)
     except subprocess.TimeoutExpired:
         row["state"] = "down"
@@ -736,18 +738,23 @@ done
 def watch_screens(host: str, interval: float = 1.0) -> subprocess.Popen:
     """Start a streaming watcher for one host. Caller owns the process.
 
-    stdin MUST be detached. ssh reads stdin by default, so an ssh started from
-    a TUI inherits the terminal and competes with it for keystrokes -- keys
-    then land in ssh instead of the app, seemingly at random. That is what -n
-    and DEVNULL are for, and it is why this is not optional.
+    stdin carries the script and nothing else -- it is a pipe of ours, never
+    the terminal, so ssh cannot compete with the panel for keystrokes the way
+    an inherited stdin used to let it.
     """
     script = (WATCH_SCRIPT.replace("__INTERVAL__", str(interval))
                           .replace("__CAPLINES__", str(CAPTURE_LINES)))
-    return subprocess.Popen(
-        run_argv(host, script, opts=["-o", "ServerAliveInterval=15"]),
-        stdin=subprocess.DEVNULL,
+    proc = subprocess.Popen(
+        run_argv(host, opts=["-o", "ServerAliveInterval=15"]),
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         text=True, bufsize=1)
+    try:
+        proc.stdin.write(script)
+        proc.stdin.close()
+    except OSError:
+        pass        # died at spawn: the reader sees EOF and backs off
+    return proc
 
 
 def parse_frame(lines: list[str], host: str = "") -> dict[str, dict]:
@@ -991,8 +998,9 @@ def kill_session(host: str, session: str) -> None:
     """
     try:
         done = subprocess.run(
-            run_argv(host, f"tmux kill-session -t {shlex.quote(session)}"),
-            stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
+            run_argv(host),
+            input=f"tmux kill-session -t {shlex.quote(session)}".encode(),
+            capture_output=True, timeout=20)
     except subprocess.TimeoutExpired:
         raise HostError("no answer after 20s")
     except subprocess.SubprocessError as exc:
@@ -1026,7 +1034,7 @@ def rename_session(host: str, session: str, wanted: str) -> str:
               f" && tmux set-option -t {shlex.quote(name)} status-left "
               f"{shlex.quote(label)}")
     try:
-        done = subprocess.run(run_argv(host, script), stdin=subprocess.DEVNULL,
+        done = subprocess.run(run_argv(host), input=script.encode(),
                               capture_output=True, timeout=20)
     except subprocess.TimeoutExpired:
         raise HostError("no answer after 20s")
