@@ -83,7 +83,12 @@ all things that happened several turns ago and are merely still visible.
 
 A redesign on either side can break these markers. `tests/test_agent_state.py` runs the reader
 against real captured screens — `python3 tests/test_agent_state.py`, no test dependencies — so a
-break shows up as a failure rather than as a quietly wrong dashboard.
+break shows up as a failure rather than as a quietly wrong dashboard. `tests/test_hosts.py` does
+the same for the transport: frame parsing, marker forgery, the mount table and `bin/ssh-mount`'s
+guards, all against fakes — no display, no network. The window itself is checked by
+`tests/test_gui.py`, which needs a display and a local tmux; it points the run at an ssh config
+and state files of its own (`CONN_SSH_CONFIG` overrides where `hosts.py` reads `~/.ssh/config` —
+ssh itself never sees it), so nothing of yours is probed or rewritten.
 
 Adding a third agent means writing its patterns as a class in `agent_state.py`; the callers do not
 change.

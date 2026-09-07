@@ -20,7 +20,12 @@ from pathlib import Path
 
 import agent_state
 
-SSH_CONFIG = Path.home() / ".ssh" / "config"
+# CONN_SSH_CONFIG points everything here that reads or edits the config at
+# another file. It exists for the tests: pointed at a config of their own they
+# can run without probing the real fleet or rewriting the real file. ssh
+# itself never sees the variable -- only this module's parsing and editing.
+SSH_CONFIG = Path(os.environ.get("CONN_SSH_CONFIG")
+                  or Path.home() / ".ssh" / "config")
 # Mountpoints live in the runtime directory, not the home folder. They hold
 # nothing -- a mountpoint is an empty hook to hang a filesystem on -- so a
 # folder in ~ for each server you once looked at was pure clutter. The runtime
@@ -549,6 +554,11 @@ def _gib(megabytes: str) -> str:
 # Actions
 # ---------------------------------------------------------------------------
 
+# Where the kernel's table is read from. A name so the tests can hand these
+# checks a table of their own.
+MOUNTS_TABLE = "/proc/self/mounts"
+
+
 def _in_mounts_table(path: Path) -> bool:
     """Whether the kernel lists `path` as a mountpoint.
 
@@ -565,7 +575,7 @@ def _in_mounts_table(path: Path) -> bool:
     wanted = (str(path).replace("\\", "\\134").replace(" ", "\\040")
               .replace("\t", "\\011").replace("\n", "\\012"))
     try:
-        with open("/proc/self/mounts") as table:
+        with open(MOUNTS_TABLE) as table:
             for line in table:
                 fields = line.split()
                 if len(fields) > 1 and fields[1] == wanted:
