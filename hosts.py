@@ -530,20 +530,35 @@ def files_label(host: str) -> str:
 def mount(host: str) -> str:
     if is_local(host):
         return str(files_root(host))
-    done = subprocess.run(["ssh-mount", host], stdin=subprocess.DEVNULL,
-                          capture_output=True, text=True, timeout=40)
+    # TimeoutExpired is a SubprocessError, not an OSError: left unconverted
+    # it escapes the (HostError, OSError) net every caller holds and kills
+    # the worker thread, and the click looks like it did nothing.
+    try:
+        done = subprocess.run(["ssh-mount", host], stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=40)
+    except subprocess.TimeoutExpired:
+        raise HostError("no answer from sshfs after 40s")
+    except subprocess.SubprocessError as exc:
+        raise HostError(str(exc))
     if done.returncode != 0:
-        raise HostError((done.stderr or done.stdout or "sshfs failed").strip().splitlines()[-1])
+        message = (done.stderr or done.stdout or "").strip()
+        raise HostError(message.splitlines()[-1] if message else "sshfs failed")
     return str(MNT_ROOT / host)
 
 
 def unmount(host: str) -> None:
     if is_local(host):
         raise HostError("local is this machine -- nothing to unmount.")
-    done = subprocess.run(["ssh-mount", "-u", host], stdin=subprocess.DEVNULL,
-                          capture_output=True, text=True, timeout=20)
+    try:
+        done = subprocess.run(["ssh-mount", "-u", host], stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=20)
+    except subprocess.TimeoutExpired:
+        raise HostError("no answer from fusermount after 20s")
+    except subprocess.SubprocessError as exc:
+        raise HostError(str(exc))
     if done.returncode != 0:
-        raise HostError((done.stderr or done.stdout or "unmount failed").strip().splitlines()[-1])
+        message = (done.stderr or done.stdout or "").strip()
+        raise HostError(message.splitlines()[-1] if message else "unmount failed")
 
 
 def tidy_mounts() -> list[str]:
@@ -872,7 +887,9 @@ def secret_value(host: str, name: str) -> str:
     except (OSError, subprocess.SubprocessError) as exc:
         raise HostError(str(exc))
     if done.returncode != 0:
-        raise HostError((done.stderr or "no such secret").strip().splitlines()[-1])
+        message = (done.stderr or "").strip()
+        raise HostError(message.splitlines()[-1] if message
+                        else "no such secret")
     return done.stdout
 
 
@@ -889,7 +906,9 @@ def secret_store(host: str, name: str, value: str) -> None:
     except (OSError, subprocess.SubprocessError) as exc:
         raise HostError(str(exc))
     if done.returncode != 0:
-        raise HostError((done.stderr or "could not store").strip().splitlines()[-1])
+        message = (done.stderr or "").strip()
+        raise HostError(message.splitlines()[-1] if message
+                        else "could not store")
 
 
 def secret_clear(host: str, name: str) -> None:
@@ -901,7 +920,9 @@ def secret_clear(host: str, name: str) -> None:
     except (OSError, subprocess.SubprocessError) as exc:
         raise HostError(str(exc))
     if done.returncode != 0:
-        raise HostError((done.stderr or "could not remove").strip().splitlines()[-1])
+        message = (done.stderr or "").strip()
+        raise HostError(message.splitlines()[-1] if message
+                        else "could not remove")
 
 
 # What a URL looks like, minus the punctuation that ends a sentence rather
@@ -954,9 +975,14 @@ def kill_session(host: str, session: str) -> None:
     There is no undo and no scrollback afterwards: whatever the agent was
     part-way through is gone. Callers ask first.
     """
-    done = subprocess.run(
-        run_argv(host, f"tmux kill-session -t {shlex.quote(session)}"),
-        stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
+    try:
+        done = subprocess.run(
+            run_argv(host, f"tmux kill-session -t {shlex.quote(session)}"),
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
+    except subprocess.TimeoutExpired:
+        raise HostError("no answer after 20s")
+    except subprocess.SubprocessError as exc:
+        raise HostError(str(exc))
     if done.returncode != 0:
         message = (done.stderr or b"").decode(errors="replace").strip()
         raise HostError(message.splitlines()[-1] if message else "kill failed")
@@ -988,8 +1014,13 @@ def rename_session(host: str, session: str, wanted: str) -> str:
     script = (f"tmux rename-session -t {shlex.quote(session)} {shlex.quote(name)}"
               f" && tmux set-option -t {shlex.quote(name)} status-left "
               f"{shlex.quote(label)}")
-    done = subprocess.run(run_argv(host, script), stdin=subprocess.DEVNULL,
-                          capture_output=True, timeout=20)
+    try:
+        done = subprocess.run(run_argv(host, script), stdin=subprocess.DEVNULL,
+                              capture_output=True, timeout=20)
+    except subprocess.TimeoutExpired:
+        raise HostError("no answer after 20s")
+    except subprocess.SubprocessError as exc:
+        raise HostError(str(exc))
     if done.returncode != 0:
         message = (done.stderr or b"").decode(errors="replace").strip()
         raise HostError(message.splitlines()[-1] if message
