@@ -221,8 +221,13 @@ class Session(Gtk.Box):
     taking over a terminal.
     """
 
+    # Counts every write conn makes to the clipboard, so the timed wipe after
+    # copying a secret can tell "still the password" from "something copied
+    # since", which is not its to blank.
+    clipboard_serial = 0
+
     def __init__(self, host: str, name: str, palette, on_exit, screen=None,
-                 font: str = "", zoom: float = 1.0):
+                 font: str = "", zoom: float = 1.0, notice=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.host = host
         self.name = name
@@ -232,6 +237,10 @@ class Session(Gtk.Box):
         # the same text, which is the only copy where a wrapped URL can be put
         # back together.
         self.screen = screen or (lambda: "")
+        # Where an action reports what it did -- the window's footer,
+        # normally. A copy with no report is indistinguishable from a copy
+        # that did not happen.
+        self.notice = notice or (lambda text: None)
 
         self.term = Vte.Terminal()
         self.term.set_hexpand(True)
@@ -369,7 +378,7 @@ class Session(Gtk.Box):
             item("Copy", self.copy)
         else:
             item("Copy -- hold shift to select", self.copy, False)
-        item("Copy the whole screen", lambda: self.to_clipboard(self.screen()))
+        item("Copy the whole screen", self.copy_screen)
         item("Paste", self.paste)
         item("Select all", self.term.select_all)
         popover.set_child(box)
@@ -377,7 +386,22 @@ class Session(Gtk.Box):
 
     @staticmethod
     def to_clipboard(text: str) -> None:
+        Session.clipboard_serial += 1
         Gdk.Display.get_default().get_clipboard().set(text)
+
+    def copy_screen(self) -> None:
+        """The whole visible screen, no selection needed -- which is the
+        point of it, since an agent with mouse reporting on takes the drag.
+
+        An empty screen leaves the clipboard alone: replacing what you had
+        with "" while reporting that nothing was copied is a paste that
+        comes up blank an hour later, with nothing to reproduce.
+        """
+        text = self.screen()
+        if text:
+            self.to_clipboard(text)
+        self.notice(f"copied the screen -- {len(text)} characters"
+                    if text else "no screen to copy yet")
 
     def copy(self) -> int:
         """Put the selection on the clipboard. Returns how much that was.
@@ -913,14 +937,19 @@ class Conn(Gtk.ApplicationWindow):
 
             def to_clipboard(_button):
                 def landed(value):
-                    clipboard = Gdk.Display.get_default().get_clipboard()
-                    clipboard.set(value)
+                    Session.to_clipboard(value)
+                    stamped = Session.clipboard_serial
                     copy.set_label("Copied")
                     # Cleared again shortly: a password left on the clipboard
-                    # is readable by anything that asks for it.
+                    # is readable by anything that asks for it. Only while it
+                    # is still the password, though -- a URL or a screen
+                    # copied from a session since is not this timer's to
+                    # blank, and neither is another application's clipboard.
                     def wipe():
-                        if clipboard.get_content() is not None:
-                            clipboard.set("")
+                        clipboard = Gdk.Display.get_default().get_clipboard()
+                        if (Session.clipboard_serial == stamped
+                                and clipboard.get_content() is not None):
+                            Session.to_clipboard("")
                         copy.set_label("Copy")
                         return False
                     GLib.timeout_add_seconds(30, wipe)
@@ -1443,15 +1472,11 @@ class Conn(Gtk.ApplicationWindow):
         return True
 
     def copy_screen(self) -> bool:
-        """The whole visible screen, no selection needed -- which is the point
-        of it, since an agent with mouse reporting on takes the drag."""
+        """ctrl-shift-s: the same copy the right-click menu offers, with the
+        same guard and the same report -- see Session.copy_screen()."""
         current = self.stack.get_visible_child()
-        if not isinstance(current, Session):
-            return True
-        text = current.screen()
-        Session.to_clipboard(text)
-        self.notice(f"copied the screen -- {len(text)} characters"
-                    if text else "no screen to copy yet")
+        if isinstance(current, Session):
+            current.copy_screen()
         return True
 
     def notice(self, text: str) -> None:
@@ -2225,7 +2250,7 @@ class Conn(Gtk.ApplicationWindow):
 
         session = Session(host, name, self.palette, self.close_session,
                           screen=lambda h=host, n=name: self.screen_of(h, n),
-                          font=self.font, zoom=self.zoom)
+                          font=self.font, zoom=self.zoom, notice=self.notice)
         self.open[key] = session
         self.stack.add_named(session, f"{host}/{name}")
         self.show(session)
