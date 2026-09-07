@@ -434,9 +434,14 @@ def probe(host: str) -> dict:
     token = secrets.token_hex(16)
     script = (REMOTE_PROBE.replace("__CAPLINES__", str(CAPTURE_LINES))
                           .replace("__BOUND__", token))
+    # StrictHostKeyChecking=yes, never accept-new: this path runs unattended
+    # for every configured host, and silently pinning whatever key the
+    # network offers is the one trust decision ssh exists to put in front of
+    # a human. An unknown key is a down-state with the fix in the tooltip;
+    # the fingerprint prompt itself belongs to the first interactive connect.
     try:
         done = subprocess.run(
-            run_argv(host, opts=["-o", "StrictHostKeyChecking=accept-new"]),
+            run_argv(host, opts=["-o", "StrictHostKeyChecking=yes"]),
             input=script,
             capture_output=True, text=True, timeout=PROBE_TIMEOUT)
     except subprocess.TimeoutExpired:
@@ -457,7 +462,11 @@ def probe(host: str) -> dict:
         # never that -- offering to install a key would be nonsense.
         refused = "Permission denied" in last and not is_local(host)
         row["state"] = "nokey" if refused else "down"
-        row["error"] = last
+        if "Host key verification failed" in last:
+            row["error"] = ("host key not verified -- open a session once "
+                            "and answer ssh's fingerprint prompt")
+        else:
+            row["error"] = last
         return row
 
     parts = _split_sections(done.stdout, token)

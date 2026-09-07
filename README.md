@@ -230,6 +230,16 @@ an API key. They live in the desktop keyring, which the same login password alre
 stores nothing itself: a value is fetched when you press Show, masked again on Hide, and a copy is
 wiped off the clipboard after thirty seconds.
 
+## First contact
+
+The background probe never accepts a host key. It runs ssh with `StrictHostKeyChecking=yes`, so a
+server whose key is not already in `known_hosts` shows as **down**, with *host key not verified* as
+the reason under the pointer. Open a session on it once -- ssh itself shows the fingerprint and
+asks -- and every probe after that rides the key you accepted. An unattended loop that trusted
+whatever key the network offered would pin a man-in-the-middle before you had consciously connected
+at all; the one trust decision stays yours. Worth knowing when you add a server: the row stays red
+until that first real connect.
+
 ## Replying
 
 You type into the session. It is a real terminal on a real pty -- not a text box that builds a
