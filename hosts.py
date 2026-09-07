@@ -621,19 +621,33 @@ exec tmux new-session -A -s '__SESSION__' \
 """
 
 
+SESSION_NAME = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def session_name(wanted: str) -> str:
+    """The name tmux will actually use for a session asked for as `wanted`.
+
+    Session names are interpolated into shell scripts, so every path filters
+    them to [A-Za-z0-9_-] rather than quoting: a session name is a label, and
+    one that needs quoting is a mistake. The filter lives here, once, so the
+    panel can file a view under the name the session really gets -- type
+    "web app" and the view, the row and the tmux session all agree on
+    "web_app", instead of the view waiting forever on a name that never
+    exists.
+    """
+    return SESSION_NAME.sub("_", wanted.strip()) or "shell"
+
+
 def connect_argv(host: str, session: str) -> list[str]:
     """How to attach to one session, wherever it lives.
 
     Both halves are argv for a real terminal -- suspend the panel over it, or
     hand it to launch() for a window of its own.
     """
+    name = session_name(session)
     if is_local(host):
-        # The name is interpolated into a shell script, so it is filtered the
-        # same way ssh-connect filters its own argument rather than quoted:
-        # a session name is a label, and one that needs quoting is a mistake.
-        name = re.sub(r"[^A-Za-z0-9_-]", "_", session) or "shell"
         return ["bash", "-c", LOCAL_CONNECT.replace("__SESSION__", name)]
-    return ["ssh-connect", host, session]
+    return ["ssh-connect", host, name]
 
 
 SESSION_APP_ID = "org.omarchy.conn-session"
@@ -986,9 +1000,6 @@ def kill_session(host: str, session: str) -> None:
     if done.returncode != 0:
         message = (done.stderr or b"").decode(errors="replace").strip()
         raise HostError(message.splitlines()[-1] if message else "kill failed")
-
-
-SESSION_NAME = re.compile(r"[^A-Za-z0-9_-]")
 
 
 def rename_session(host: str, session: str, wanted: str) -> str:

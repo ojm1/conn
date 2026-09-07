@@ -470,6 +470,10 @@ class Conn(Gtk.ApplicationWindow):
         # one -- has no row to highlight yet. The key waits here until the
         # probe brings the row in. See select_key().
         self.pending: tuple[str, str] | None = None
+        # True while the window is moving the highlight itself, so
+        # row_selected() can tell the user's own move -- the only kind that
+        # cancels the promise in self.pending -- from the window's.
+        self.selecting = False
         # One watch thread per host, with the two events the main thread
         # steers it by: halt ends the loop for good, poke cuts a backoff
         # short. The thread itself is the record of whether a host is being
@@ -518,6 +522,7 @@ class Conn(Gtk.ApplicationWindow):
         self.list = Gtk.ListBox()
         self.list.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self.list.connect("row-activated", self.row_activated)
+        self.list.connect("row-selected", self.row_selected)
         self.list.add_css_class("sidebar")
         self.list.set_filter_func(self.matches)
 
@@ -1510,14 +1515,36 @@ class Conn(Gtk.ApplicationWindow):
         pointing at the session you had just left, for as long as you left it
         alone. The key is kept instead, and render() finishes the job.
         """
+        row = self.row_for(key)
+        if row is None:
+            self.pending = key
+            return
+        self.selecting = True
+        self.list.select_row(row)
+        self.selecting = False
+        self.pending = None
+
+    def row_for(self, key: tuple[str, str]) -> Gtk.ListBoxRow | None:
         index = 0
         while (row := self.list.get_row_at_index(index)) is not None:
             if getattr(row, "key", None) == key:
-                self.list.select_row(row)
-                self.pending = None
-                return
+                return row
             index += 1
-        self.pending = key
+        return None
+
+    def row_selected(self, _list, row) -> None:
+        """A highlight moved by hand cancels the promise in self.pending.
+
+        By hand means a click or an arrow key -- the arrows move the
+        highlight without changing which session is showing, so the old test
+        of "is the promised session still on screen" could not see the move
+        and stole the highlight back. The window's own moves run under
+        self.selecting, and a row being removed reports None: neither is a
+        choice.
+        """
+        if self.selecting or row is None:
+            return
+        self.pending = None
 
     def _wordmark(self) -> Gtk.Widget:
         """The name, drawn rather than written.
@@ -1880,18 +1907,14 @@ class Conn(Gtk.ApplicationWindow):
             return
 
         # What the highlight is on, and what it was promised to and could not
-        # have yet -- a session opened before its row existed. The promise
-        # stands only while that session is the one on screen, so a highlight
-        # moved by hand in the meantime is left where it was put.
+        # have yet -- a session opened before its row existed. A highlight
+        # moved by hand cancelled the promise the moment it moved -- see
+        # row_selected() -- so whatever is still owed here is owed for real.
         chosen = None
         row = self.list.get_selected_row()
         if row is not None:
             chosen = getattr(row, "key", None)
         wanted, self.pending = self.pending, None
-        current = self.stack.get_visible_child()
-        if not (isinstance(current, Session)
-                and (current.host, current.name) == wanted):
-            wanted = None
 
         while (child := self.list.get_first_child()) is not None:
             self.list.remove(child)
@@ -1909,9 +1932,19 @@ class Conn(Gtk.ApplicationWindow):
         self.shape = shape
 
         if wanted is not None:
-            self.select_key(wanted)
-        elif chosen is not None:
-            self.select_key(chosen)
+            self.select_key(wanted)     # owed again if the row is still missing
+        if self.list.get_selected_row() is None and chosen is not None:
+            if self.pending is None:
+                self.select_key(chosen)
+            else:
+                # The promise stands. The user's highlight is put back
+                # without settling it -- select_key would -- so the pending
+                # row still takes over when it finally arrives.
+                row = self.row_for(chosen)
+                if row is not None:
+                    self.selecting = True
+                    self.list.select_row(row)
+                    self.selecting = False
 
     def announce(self) -> None:
         """Say, once, when a session starts waiting on you.
@@ -2175,6 +2208,10 @@ class Conn(Gtk.ApplicationWindow):
         terminal about which session you are looking at -- opening one by its
         number used to move the terminal and leave the highlight behind.
         """
+        # The key is the name tmux will actually use -- both connect paths
+        # filter what they are handed, so a view keyed by the raw typed name
+        # would wait forever for a row that arrives under the filtered one.
+        name = hosts.session_name(name)
         key = (host, name)
         # A notification can send you to a server that is not starred, and a
         # view whose row is folded away has nothing for the list to highlight.
