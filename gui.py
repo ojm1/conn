@@ -466,7 +466,12 @@ class Conn(Gtk.ApplicationWindow):
         # one -- has no row to highlight yet. The key waits here until the
         # probe brings the row in. See select_key().
         self.pending: tuple[str, str] | None = None
-        self.watched: set[str] = set()
+        # One watch thread per host, with the two events the main thread
+        # steers it by: halt ends the loop for good, poke cuts a backoff
+        # short. The thread itself is the record of whether a host is being
+        # streamed -- see start_stream().
+        self.streams: dict[str, tuple[threading.Thread,
+                                      threading.Event, threading.Event]] = {}
         self.watchers: dict[str, object] = {}
         self.inflight: set[str] = set()
         self.frames: queue.Queue = queue.Queue(maxsize=256)
@@ -744,8 +749,13 @@ class Conn(Gtk.ApplicationWindow):
         The sweep already comes back to a down host every 45 seconds, but
         silently, so a box you have just fixed looks stuck until it happens.
         This is the same probe on demand, and the row says "checking" while
-        it runs so the answer is visibly being fetched.
+        it runs so the answer is visibly being fetched. The host's stream is
+        poked too: one sitting out a long backoff reconnects now rather than
+        in minutes, or the row would say up while the screens stay frozen.
         """
+        entry = self.streams.get(host)
+        if entry is not None:
+            entry[2].set()
         if host in self.inflight:
             return
         row = self.rows.get(host)
@@ -1049,21 +1059,12 @@ class Conn(Gtk.ApplicationWindow):
         """
         if host in self.starred:
             self.starred.discard(host)
-            proc = self.watchers.pop(host, None)
-            if proc is not None:
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
-            self.watched.discard(host)
+            self.stop_stream(host)
             self.probed[host] = time.monotonic()
         else:
             self.starred.add(host)
-            if (os.environ.get("CONN_NO_WATCH") != "1"
-                    and host not in self.watched and not self.holding):
-                self.watched.add(host)
-                threading.Thread(target=self._stream, args=(host,),
-                                 name=f"watch-{host}", daemon=True).start()
+            if not self.holding:
+                self.start_stream(host)
             self.recheck(host)      # it is live now; do not wait for the sweep
         save_stars(self.starred)
         self.shape = []
@@ -1144,13 +1145,8 @@ class Conn(Gtk.ApplicationWindow):
         for key in [k for k in self.open if k[0] == host]:
             self.close_session(self.open[key])
 
-        proc = self.watchers.pop(host, None)
-        if proc is not None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
-        self.watched.discard(host)
+        self.stop_stream(host)
+        self.streams.pop(host, None)
         self.rows.pop(host, None)
         self.inflight.discard(host)
         self.probed.pop(host, None)
@@ -1741,14 +1737,9 @@ class Conn(Gtk.ApplicationWindow):
         wait for.
         """
         self.holding = False
-        if os.environ.get("CONN_NO_WATCH") != "1":
-            for host in self.order:
-                if host not in self.starred:
-                    continue    # unstarred hosts are polled, never streamed
-                if host not in self.watched:
-                    self.watched.add(host)
-                    threading.Thread(target=self._stream, args=(host,),
-                                     name=f"watch-{host}", daemon=True).start()
+        for host in self.order:
+            if host in self.starred:    # the rest are polled, never streamed
+                self.start_stream(host)
         self.sweep()
 
     def listed(self) -> list[tuple[str, str]]:
@@ -2239,45 +2230,99 @@ class Conn(Gtk.ApplicationWindow):
 
     # -- streaming ---------------------------------------------------------
 
-    def _stream(self, host: str) -> None:
+    def start_stream(self, host: str) -> None:
+        """Give a host its watch thread, however many times it is asked.
+
+        The gate is the thread itself, not a bookkeeping set: a set outlives
+        the thread it stands for -- a spawn that failed, a stream just halted
+        -- and gating re-star on stale bookkeeping is how star/unstar cycles
+        used to stack up duplicate ssh streams.
+        """
+        if os.environ.get("CONN_NO_WATCH") == "1":
+            return
+        entry = self.streams.get(host)
+        if entry is not None and entry[0].is_alive() and not entry[1].is_set():
+            return
+        halt, poke = threading.Event(), threading.Event()
+        thread = threading.Thread(target=self._stream, args=(host, halt, poke),
+                                  name=f"watch-{host}", daemon=True)
+        self.streams[host] = (thread, halt, poke)
+        thread.start()
+
+    def stop_stream(self, host: str) -> None:
+        """Take a host's stream down and keep it down.
+
+        Terminating the process alone only looks like a dropped connection:
+        the thread would back off and reconnect. The halt is what makes the
+        stop stick.
+        """
+        entry = self.streams.get(host)
+        if entry is not None:
+            entry[1].set()
+        proc = self.watchers.pop(host, None)
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
+    def _stream(self, host: str, halt: threading.Event,
+                poke: threading.Event) -> None:
         """Hold one channel open per host and read screens off it.
 
         Lifted from the TUI unchanged in spirit: the far side only speaks when
-        a screen actually changed, so an idle host costs nothing.
+        a screen actually changed, so an idle host costs nothing. halt is this
+        thread's own stop order -- unstar, forget, shutdown -- and poke cuts
+        a pending backoff short without stopping anything.
         """
         delay = WATCH_RETRY_MIN
-        while not self.stopping:
+        while not (self.stopping or halt.is_set()):
             opened = time.monotonic()
             try:
                 proc = hosts.watch_screens(host, WATCH_INTERVAL)
             except OSError:
-                return
-            self.watchers[host] = proc
-            buffer: list[str] = []
-            try:
-                while not self.stopping:
-                    line = proc.stdout.readline()
-                    if not line:
-                        break
-                    if line.startswith("###FRAME"):
-                        frame = hosts.parse_frame(buffer, host)
-                        buffer = []
-                        try:
-                            self.frames.put_nowait((host, frame))
-                        except queue.Full:
-                            pass
-                    else:
-                        buffer.append(line.rstrip("\n"))
-            except (OSError, ValueError):
-                pass
-            finally:
-                self.watchers.pop(host, None)
+                proc = None     # spawn refused: back off like a dropped stream
+            if proc is not None:
+                self.watchers[host] = proc
+                if self.stopping or halt.is_set():
+                    # Halted between spawn and registration: the stopper's
+                    # pop found nothing, so this process is ours to take down.
+                    if self.watchers.get(host) is proc:
+                        self.watchers.pop(host, None)
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    return
+                poke.clear()    # a check-again from before this connection
+                buffer: list[str] = []
                 try:
-                    proc.terminate()
-                except Exception:
+                    while not (self.stopping or halt.is_set()):
+                        line = proc.stdout.readline()
+                        if not line:
+                            break
+                        if line.startswith("###FRAME"):
+                            frame = hosts.parse_frame(buffer, host)
+                            buffer = []
+                            try:
+                                self.frames.put_nowait((host, frame))
+                            except queue.Full:
+                                pass
+                        else:
+                            buffer.append(line.rstrip("\n"))
+                except (OSError, ValueError):
                     pass
+                finally:
+                    # Only our own entry: a successor stream may already
+                    # have registered its process under this host.
+                    if self.watchers.get(host) is proc:
+                        self.watchers.pop(host, None)
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
 
-            if self.stopping:
+            if self.stopping or halt.is_set():
                 return
             # A stream that ran a while and dropped is a network event: come
             # back quickly. One that died at once means we are being refused,
@@ -2285,8 +2330,11 @@ class Conn(Gtk.ApplicationWindow):
             delay = (WATCH_RETRY_MIN if time.monotonic() - opened >= WATCH_HEALTHY
                      else min(delay * 2, WATCH_RETRY_MAX))
             deadline = time.monotonic() + delay * random.uniform(0.75, 1.25)
-            while not self.stopping and time.monotonic() < deadline:
-                time.sleep(0.25)
+            while (not (self.stopping or halt.is_set())
+                   and time.monotonic() < deadline):
+                if poke.wait(0.25):
+                    poke.clear()    # a check-again: try the host now
+                    break
 
     def drain_frames(self) -> bool:
         dirty = False
@@ -2323,6 +2371,8 @@ class Conn(Gtk.ApplicationWindow):
 
     def shut_down(self, *_args) -> bool:
         self.stopping = True
+        for _thread, halt, _poke in list(self.streams.values()):
+            halt.set()
         for proc in list(self.watchers.values()):
             try:
                 proc.terminate()
