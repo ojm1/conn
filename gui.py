@@ -134,12 +134,15 @@ MARKS = {
 # session name and the body a line read off a remote screen, and whatever
 # renders them is not a terminal conn controls: control characters -- C0 and
 # C1 both, which also beheads any escape sequence -- have no business there,
-# and neither does unbounded length.
+# and neither does unbounded length. Nor does markup: a daemon that renders
+# body markup would follow <b> or <a href> where a name should be, so it is
+# escaped last -- after the clamp, which could otherwise cut an entity in
+# half and leave the text ending in a bare "&am".
 NOTIFY_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 def notify_text(text: str, limit: int = 120) -> str:
-    return NOTIFY_UNSAFE.sub("", text)[:limit]
+    return GLib.markup_escape_text(NOTIFY_UNSAFE.sub("", text)[:limit])
 
 
 def session_ref(host: str, name: str) -> str:
@@ -468,6 +471,9 @@ class Session(Gtk.Box):
             self.to_clipboard(text)
             return len(text)
         if self.term.get_has_selection():
+            # Still a write conn makes to the clipboard: without the bump,
+            # the timed wipe after a secret would blank this newer copy.
+            Session.clipboard_serial += 1
             self.term.copy_clipboard_format(Vte.Format.TEXT)
             return -1                            # copied, size unknown
         return 0
@@ -1619,7 +1625,8 @@ class Conn(Gtk.ApplicationWindow):
             self.close_session(current)
         return True
 
-    def select_key(self, key: tuple[str, str]) -> None:
+    def select_key(self, key: tuple[str, str],
+                   promise: bool = True) -> None:
         """Highlight one session, now or as soon as it has a row.
 
         A session made from the + button is running before anything has asked
@@ -1629,10 +1636,17 @@ class Conn(Gtk.ApplicationWindow):
         then put the highlight back where it had been -- so the list sat
         pointing at the session you had just left, for as long as you left it
         alone. The key is kept instead, and render() finishes the job.
+
+        Only an open or show path may leave that promise: promise=False is
+        for restoring a highlight, where a row that has vanished -- killed
+        session, folded host -- is a highlight lost, not a session owed. A
+        restore that armed self.pending fired as an opened-looking selection
+        whenever a row by that name came back, however much later.
         """
         row = self.row_for(key)
         if row is None:
-            self.pending = key
+            if promise:
+                self.pending = key
             return
         self.selecting = True
         self.list.select_row(row)
@@ -2045,6 +2059,10 @@ class Conn(Gtk.ApplicationWindow):
         if row is not None:
             chosen = getattr(row, "key", None)
         wanted, self.pending = self.pending, None
+        if wanted is not None and wanted not in self.open:
+            # The view the promise was made for has since been closed: what
+            # is left is a lost highlight, not a session owed a selection.
+            wanted = None
 
         while (child := self.list.get_first_child()) is not None:
             self.list.remove(child)
@@ -2065,7 +2083,17 @@ class Conn(Gtk.ApplicationWindow):
             self.select_key(wanted)     # owed again if the row is still missing
         if self.list.get_selected_row() is None and chosen is not None:
             if self.pending is None:
-                self.select_key(chosen)
+                # A restore only re-arms the promise for the session still
+                # on screen -- its row will be back and is owed the
+                # highlight. Any other vanished row -- killed session,
+                # folded host -- is a highlight lost, not a session owed:
+                # armed here, it fired whenever a row by that name came
+                # back, however much later.
+                showing = self.stack.get_visible_child()
+                self.select_key(chosen,
+                                promise=(isinstance(showing, Session)
+                                         and (showing.host, showing.name)
+                                         == chosen))
             else:
                 # The promise stands. The user's highlight is put back
                 # without settling it -- select_key would -- so the pending
