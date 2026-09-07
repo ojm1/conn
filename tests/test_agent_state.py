@@ -90,6 +90,8 @@ CLAUDE = {
     "finished fleet above": (f"8/8 agents done · 5m 0s ·\n  fleet summary\n"
                              f"{RULE}\n❯ \n{RULE}\n  1/8 agents done · 12s ·"),
     "workflow": f"{RULE}\n❯ \n{RULE}\n  Waiting for 2 workflows",
+    "draft with fleet": (f"{RULE}\n❯ finish the migration\n{RULE}\n"
+                         f"  3/8 agents done · 1m 2s ·"),
 }
 
 CASES = [
@@ -119,6 +121,8 @@ CASES = [
     ("claude fleet still going", CLAUDE["finished fleet above"],
      ["claude"], A.WORKING),
     ("claude workflow",       CLAUDE["workflow"],   ["claude"], A.WORKING),
+    ("claude draft over a fleet", CLAUDE["draft with fleet"],
+     ["claude"], A.DRAFT),
 
     # No pane list at all: the agent is guessed from its own chrome.
     ("claude guessed from chrome",   CLAUDE["busy"],      [], A.WORKING),
@@ -208,6 +212,9 @@ def main() -> int:
         ("a workflow is background work",
          A.classify(CLAUDE["workflow"], ["claude"])["detail"]
          == "2 workflows running"),
+        ("the draft clock gets the box without the ticking fleet",
+         A.classify(CLAUDE["draft with fleet"], ["claude"])["draft"]
+         == "finish the migration"),
         ("draft and blocked both call for a human",
          A.needs_attention(A.DRAFT) and A.needs_attention(A.NEEDS_YOU)),
         ("working and idle do not",

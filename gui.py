@@ -2049,7 +2049,10 @@ class Conn(Gtk.ApplicationWindow):
                 fresh = first or before is None
 
                 if state == agent_state.DRAFT:
-                    if self.draft_settled(key, session["agent"]["detail"],
+                    # The box text, not the detail: the detail's background
+                    # suffix ticks every frame, and a clock keyed on it
+                    # never settles while a fleet runs.
+                    if self.draft_settled(key, session["agent"]["draft"],
                                           now, silent=fresh):
                         self.notify(host, session)
                     continue

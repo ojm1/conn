@@ -454,9 +454,10 @@ def ghost_lines(raw: str) -> set[int]:
 
 
 def classify(screen: str, commands: list[str], raw: str = "") -> dict:
-    """Return {state, label, detail, tokens, agent} for one session's screen."""
+    """Return {state, label, detail, draft, tokens, agent} for one session's
+    screen."""
     result = {"state": UNKNOWN, "label": LABELS[UNKNOWN], "detail": "",
-              "tokens": "", "agent": ""}
+              "draft": "", "tokens": "", "agent": ""}
 
     agent = detect(commands)
     if commands and agent is None:
@@ -513,6 +514,9 @@ def classify(screen: str, commands: list[str], raw: str = "") -> dict:
         # session expecting it to be idle and find it mid-flight.
         result["state"] = DRAFT
         result["label"] = LABELS[DRAFT]
+        # The box alone, apart from the detail: the background suffix ticks
+        # on its own, and the draft-settled clock must not restart with it.
+        result["draft"] = box
         background = agent.background(screen)
         result["detail"] = f"{box}  ({background})" if background else box
         return result
