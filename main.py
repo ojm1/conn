@@ -26,7 +26,7 @@ Inside the window:
   ctrl-q         quit
   right-click    a host for new session, files, keys; a session to open or kill
 
-Chat states:  working | needs you | unsent draft | idle | shell
+Chat states:  working | needs you | unsent draft | idle | shell | unknown
 
 The list is a live view of every session's screen, updated about once a second.
 CONN_NO_WATCH=1 disables streaming and falls back to 45s polling.
