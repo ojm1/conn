@@ -290,10 +290,13 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
           [s[2] for s in sent] == [agent_state.NEEDS_YOU], f"sent={sent}")
 
     # A draft is text you are in the middle of typing until it stops changing,
-    # so it is announced on the silence, not on the first keystroke.
+    # so it is announced on the silence, not on the first keystroke. The clock
+    # watches the box, not the detail: the detail carries a background-work
+    # suffix that ticks every frame, and a clock keyed on it never settles.
     sent.clear()
     session["agent"] = dict(session["agent"], state=agent_state.DRAFT,
-                            label="unsent draft", detail="what's the health")
+                            label="unsent draft", detail="what's the health",
+                            draft="what's the health")
     window.render()
     check("typing is not an interruption", not sent, f"sent={sent}")
 
@@ -301,11 +304,15 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
         text, since, told = window.drafts[alpha]
         window.drafts[alpha] = (text, since - by, told)
 
-    session["agent"] = dict(session["agent"], detail="what's the health check")
+    session["agent"] = dict(session["agent"], draft="what's the health check")
     rewind()
     window.render()
     check("and an edit puts the clock back", not sent, f"sent={sent}")
 
+    # Background work ticking in the detail is not an edit -- the box is
+    # unchanged, so the clock keeps running and the settled draft is said.
+    session["agent"] = dict(session["agent"],
+                            detail="what's the health check  (running tests)")
     rewind()
     window.render()
     check("a draft left sitting is worth saying",
@@ -829,9 +836,15 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     # The cold half of one-window: the click arrives first, do_activate
     # never runs, and the fresh window must be presented with the named
     # session open in it -- the historical bug window()'s docstring
-    # describes. A second, unregistered ConnApp stands in for the cold
-    # process; the panel above keeps its own app and window.
+    # describes. A second ConnApp stands in for the cold process; the panel
+    # above keeps its own app and window. It has to be registered before it
+    # can hold a window (GApplication forbids windows before ::startup), and
+    # it takes a distinct, non-unique id so it neither owns nor is answered
+    # by the real conn already holding APP_ID on the session bus.
     app2 = gui.ConnApp()
+    app2.set_application_id(gui.APP_ID + ".test.cold")
+    app2.set_flags(app2.get_flags() | Gio.ApplicationFlags.NON_UNIQUE)
+    app2.register(None)
     app2.open_from_notification(None, grab["target"])
     twos = app2.get_windows()
     check("a click with no window builds exactly one", len(twos) == 1,
