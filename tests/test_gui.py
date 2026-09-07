@@ -506,13 +506,8 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
           any("Forget" in (label or "") for label in on_host)
           == ("local" in hosts.config_hosts()),
           f"menu={on_host}")
-    named = [h for h in hosts.config_hosts()]
-    if named:
-        on_named = menu_items(window.host_menu, row_for(window, alpha),
-                              named[0], 0, 0)
-        check("but one that is in ~/.ssh/config can be forgotten",
-              any(f"Forget {named[0]}" in (label or "") for label in on_named),
-              f"menu={on_named}")
+    # A host the config does name is offered for forgetting further down,
+    # beside the forget flow itself, against a config of this run's own.
 
     # -- the new-session dialog names the host it is about ----------------
     def dialog_labels():
@@ -730,6 +725,131 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
                   "the whole reason this is safe to run at startup")
         finally:
             hosts.MNT_ROOT = was
+
+    # -- forgetting a server, above the config edit --------------------------
+    # remove_host is proven against its own file above; this drives the
+    # window's half: the views, the watcher, the bookkeeping and the star
+    # all have to go with the Host block. The host is a fixture in a config
+    # of this run's own, and nothing ever sshes to it -- forget_host edits
+    # files and window state, which is the point.
+    with _tempfile.TemporaryDirectory() as tmp:
+        conf = Path(tmp) / "config"
+        conf.write_text("Host conntest-remote\n    HostName remote.invalid\n")
+        was, hosts.SSH_CONFIG = hosts.SSH_CONFIG, conf
+        real_close = window.close_session
+        closed: list = []
+
+        class View:
+            host, name = "conntest-remote", "deploy"
+
+        class Watcher:
+            terminated = False
+
+            def terminate(self):
+                self.terminated = True
+
+        watcher = Watcher()
+        try:
+            anchor = next((r for r in rows(window)
+                           if getattr(r, "key", None) is not None), None)
+            on_named = menu_items(window.host_menu, anchor,
+                                  "conntest-remote", 0, 0)
+            check("a host that is in the config can be forgotten",
+                  any("Forget conntest-remote" in (label or "")
+                      for label in on_named),
+                  f"menu={on_named}")
+
+            window.close_session = lambda view: (
+                closed.append((view.host, view.name)),
+                window.open.pop((view.host, view.name), None))
+            window.rows["conntest-remote"] = hosts.blank("conntest-remote")
+            window.probed["conntest-remote"] = 1.0
+            window.streamed["conntest-remote"] = 1.0
+            window.inflight.add("conntest-remote")
+            window.watchers["conntest-remote"] = watcher
+            window.starred.add("conntest-remote")
+            window.open[("conntest-remote", "deploy")] = View()
+
+            window.forget_host("conntest-remote")
+            check("forgetting a server closes its views and no others",
+                  closed == [("conntest-remote", "deploy")]
+                  and all(k[0] != "conntest-remote" for k in window.open),
+                  f"closed={closed}")
+            check("its watcher is terminated and dropped",
+                  watcher.terminated
+                  and "conntest-remote" not in window.watchers)
+            check("and every trace leaves the books",
+                  not any("conntest-remote" in place for place in
+                          (window.rows, window.probed, window.streamed,
+                           window.inflight)))
+            check("the star goes too, and is written down",
+                  "conntest-remote" not in window.starred
+                  and "conntest-remote" not in (gui.read_stars() or set()))
+            check("the Host block is out of the config",
+                  "conntest-remote" not in conf.read_text())
+            check("with the old config kept beside it",
+                  any(entry.name.startswith("config.bak.")
+                      for entry in Path(tmp).iterdir()))
+            check("and the footer says what happened",
+                  "forgot conntest-remote" in window.footnote.get_text(),
+                  f"footer={window.footnote.get_text()!r}")
+        finally:
+            window.close_session = real_close
+            hosts.SSH_CONFIG = was
+
+    # -- a notification, and the click that answers it -----------------------
+    # The builder's fields are checked hermetically in test_hosts.py; here
+    # its actual output drives the click handler, because the two only agree
+    # by both going through session_ref/split_ref -- change the target format
+    # in one place and this is the check that fails.
+    Gio = gui.Gio
+    grab = {}
+    orig_target = Gio.Notification.set_default_action_and_target
+
+    def observed(note, action, target):
+        grab["action"], grab["target"] = action, target
+        return orig_target(note, action, target)
+
+    Gio.Notification.set_default_action_and_target = observed
+    try:
+        gui.notification("local", {
+            "name": beta[1],
+            "agent": {"state": agent_state.NEEDS_YOU, "label": "needs you",
+                      "detail": "Do you want to?"}})
+    finally:
+        Gio.Notification.set_default_action_and_target = orig_target
+    check("the notification's click carries the shared ref",
+          grab.get("action") == "app.open-session"
+          and gui.split_ref(grab["target"].get_string()) == beta,
+          f"grabbed={grab}")
+
+    # The cold half of one-window: the click arrives first, do_activate
+    # never runs, and the fresh window must be presented with the named
+    # session open in it -- the historical bug window()'s docstring
+    # describes. A second, unregistered ConnApp stands in for the cold
+    # process; the panel above keeps its own app and window.
+    app2 = gui.ConnApp()
+    app2.open_from_notification(None, grab["target"])
+    twos = app2.get_windows()
+    check("a click with no window builds exactly one", len(twos) == 1,
+          f"windows={len(twos)}")
+    window2 = twos[0] if twos else None
+    if window2 is not None:
+        window2.notify = lambda host, s: None   # nothing reaches the desktop
+        check("a fresh panel, not the one above",
+              isinstance(window2, gui.Conn) and window2 is not window)
+        current = window2.stack.get_visible_child()
+        check("with the named session open and showing",
+              beta in window2.open and isinstance(current, gui.Session)
+              and (current.host, current.name) == beta,
+              f"open={list(window2.open)}")
+        app2.open_from_notification(None, grab["target"])
+        check("and a second click reuses it",
+              len(app2.get_windows()) == 1
+              and gui.ConnApp.window(app2) is window2)
+        for view in list(window2.open.values()):
+            window2.close_session(view)
+        window2.destroy()
 
     # -- secrets, in the real keyring ---------------------------------------
     # The one check that touches real user state, so it is opt-in: it proves
