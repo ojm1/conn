@@ -15,12 +15,23 @@ set -uo pipefail
 host=${1:?usage: ssh-connect <host> [session-name]}
 session=${2:-claude}
 
-# The host lands inside the remote command string and in a cache file name,
-# so a name that needs quoting is refused rather than rewritten -- silently
-# fixing it up would connect somewhere the user did not type. The session
-# name is different: tmux is going to create whatever we ask for, so a
-# filtered name still names the session you get.
-if [[ ! $host =~ ^[A-Za-z0-9_.][A-Za-z0-9_.-]*$ ]]; then
+# The host lands inside the remote command string, in the tmux status bar,
+# and in a cache file name, so a name that could break out of any of those
+# is refused rather than rewritten -- silently fixing it up would connect
+# somewhere the user did not type. Only what genuinely breaks is refused:
+# a leading dash reads as an option to mosh, whitespace and control
+# characters smuggle words and escape sequences, quote and expansion
+# characters would step out of the sh -c wrapper below or run commands from
+# the status bar (tmux expands #(...) there), and / walks the mosh cache
+# file out of its directory. Everything else the panel can list must
+# attach: keep this in step with _usable_alias in hosts.py, whose rejects
+# ('*?!/' and a leading dash) are a subset of these. The doubled backslash
+# is one member: the unquoted expansion is a glob bracket, where a lone
+# backslash only escapes what follows. The session name is different: tmux
+# is going to create whatever we ask for, so a filtered name still names
+# the session you get.
+unsafe=$' \t\'"\\\\`$!#*?/'
+if [[ $host == -* || $host == *[$unsafe]* || $host == *[[:cntrl:]]* ]]; then
   printf 'ssh-connect: unusable host name: %q\n' "$host" >&2
   exit 2
 fi
@@ -44,7 +55,28 @@ printf '\033]0;%s\007' "$host/$session"
 # as old as tmux. Debian 10 / Ubuntu 20.04 still ship 3.0a.
 banner="F12  or  ctrl-b d   =   back to the server panel"
 
-remote="if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s '$session' \\; bind-key -n F12 detach-client \\; set-option -t '$session' status-left-length 40 \\; set-option -t '$session' status-left '[$host/$session] ' \\; set-option -t '$session' display-time 5000 \\; display-message '$banner'; else echo '(tmux not installed on this host -- plain shell)'; echo '(type exit to return to the panel)'; exec \$SHELL -l; fi"
+# The remote LOGIN shell parses this whole string before any sh exists --
+# and the login shell can be fish or tcsh, which do not read POSIX 'if'.
+# One shape reads identically under all of them: exec sh -c '<script>',
+# provided the single-quoted script contains no single quote (ends the word
+# for sh and csh), no backslash (fish gives it meaning inside single
+# quotes), no exclamation mark (csh expands history inside quotes) and no
+# newline (csh cannot quote one). So it is built to contain none of the
+# four: tmux's separator is the argument ";" rather than \;, inner quoting
+# is all double quotes, and everything spliced in is already confined --
+# $session to [A-Za-z0-9_-] above, $host by the guard above, $banner by
+# being this file's own literal.
+script="if command -v tmux >/dev/null 2>&1; then exec tmux new-session -A -s \"$session\" \";\" bind-key -n F12 detach-client \";\" set-option -t \"$session\" status-left-length 40 \";\" set-option -t \"$session\" status-left \"[$host/$session] \" \";\" set-option -t \"$session\" display-time 5000 \";\" display-message \"$banner\"; else echo \"(tmux not installed on this host -- plain shell)\"; echo \"(type exit to return to the panel)\"; exec \$SHELL -l; fi"
+
+# Enforced, not assumed: an edit that lets one of the four back in should
+# fail here, not on some fish user's server.
+case $script in
+  *[\'\\!$'\n']*)
+    echo "ssh-connect: bug: the remote script no longer parses in every login shell" >&2
+    exit 70;;
+esac
+
+remote="exec sh -c '$script'"
 
 # Asking the server whether it has mosh costs a round trip, which is exactly
 # what we are trying to avoid, so the answer is cached for a week.
@@ -60,8 +92,10 @@ has_mosh_server() {
   fi
 
   local answer=no
+  # Through sh, same as the attach command: this too is parsed by the login
+  # shell, and tcsh has neither 'command' nor '2>&1'.
   if ssh -o BatchMode=yes -o ConnectTimeout=6 -- "$1" \
-       'command -v mosh-server >/dev/null 2>&1' 2>/dev/null; then
+       "exec sh -c 'command -v mosh-server >/dev/null 2>&1'" 2>/dev/null; then
     answer=yes
   fi
   printf '%s' "$answer" > "$cache"

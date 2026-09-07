@@ -120,6 +120,10 @@ def _usable_alias(name: str) -> bool:
     host would follow it out of the mountpoint tree -- and so is a leading
     dash, which reads as an option to ssh, sshfs and everything else an
     alias is handed to.
+
+    bin/ssh-connect carries the attach side's guard: everything this lists
+    it must accept, so its rejects are these plus only what breaks its own
+    sinks. Change either and check the other.
     """
     return not re.search(r"[*?!/]", name) and not name.startswith("-")
 

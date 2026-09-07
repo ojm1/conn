@@ -103,8 +103,10 @@ covers what the stream doesn't: uptime, disk, mounts, and the session list.
 
 `CONN_NO_WATCH=1` falls back to plain polling.
 
-The far side needs only `tmux` and a POSIX `sh`: the scripts are piped to `sh` explicitly rather
-than handed to the login shell to parse, so a fish or tcsh user on the remote is fine.
+The far side needs only `tmux` and a POSIX `sh`: the background scripts are piped to `sh`
+explicitly rather than handed to the login shell to parse, and the attach command is a single
+`exec sh -c` line built to read identically under sh, fish and tcsh -- so a fish or tcsh user on
+the remote is fine.
 
 ## This machine, too
 
