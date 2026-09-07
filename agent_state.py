@@ -32,7 +32,7 @@ UNKNOWN = "unknown"
 
 # What a dialog is allowed to draw in front of its own text: box bars, carets,
 # bullets, indentation. Quote marks are deliberately not in it -- see BLOCKED.
-CHROME = r"""^[^\w\n"“”'`]*"""
+CHROME = r"""^[^\w\n"“”‘’'`]*"""
 
 LABELS = {
     WORKING: "working",
@@ -57,6 +57,7 @@ class Agent:
 
     BUSY: re.Pattern | None = None
     BLOCKED: tuple[re.Pattern, ...] = ()
+    SETTLED: re.Pattern | None = None
     TOKENS: re.Pattern | None = None
 
     def input_box(self, screen: str,
@@ -80,19 +81,39 @@ class Agent:
         /context or a compaction notice, and the footer is below all of them."""
         return last_match(self.TOKENS, screen) if self.TOKENS else ""
 
-    def blocked_detail(self, screen: str) -> str:
-        """The newest match of the most telling pattern.
+    def blocked(self, screen: str) -> bool:
+        """Whether a prompt is still asking, not merely still visible.
 
-        Pattern order is a preference -- the question a prompt asks says more
-        than the "1. Yes" underneath it -- so that is kept. Within one pattern
-        it is the *last* match that matters: a prompt you already answered
-        stays in the transcript above the one still waiting, and quoting the
-        old one is how the panel described the wrong prompt.
+        An answered prompt stays in the transcript, and 200 captured lines
+        keep it on screen long after the turn moved on -- so a match alone
+        does not mean blocked. What marks it answered is what the agent
+        drew underneath: SETTLED names that shape, and a match with any of
+        it below is history, not a question.
+        """
+        for pattern in self.BLOCKED:
+            for match in pattern.finditer(screen):
+                if self.SETTLED is None or not self.SETTLED.search(
+                        screen, match.end()):
+                    return True
+        return False
+
+    def blocked_detail(self, screen: str) -> str:
+        """The newest live match of the most telling pattern.
+
+        Pattern order is a preference -- the question a prompt asks says
+        more than the "1. Yes" underneath it -- so that is kept. But only
+        matches still asking count, whichever pattern they fall under: a
+        prompt you already answered stays in the transcript above the one
+        still waiting, and quoting the old one is how the panel described
+        the wrong prompt -- even across patterns, when the answered
+        question outranked the live one.
         """
         for pattern in self.BLOCKED:
             newest = None
             for match in pattern.finditer(screen):
-                newest = match
+                if self.SETTLED is None or not self.SETTLED.search(
+                        screen, match.end()):
+                    newest = match
             if newest is not None:
                 line = screen[newest.start():].splitlines()[0]
                 return line.strip().strip("│┃ ")[:60]
@@ -128,11 +149,24 @@ class ClaudeCode(Agent):
     BLOCKED = (
         re.compile(CHROME + r"Do you want to\b", re.I | re.M),
         re.compile(CHROME + r"Would you like to\b", re.I | re.M),
-        re.compile(r"^\s*❯?\s*1\.\s*Yes\b", re.M),
+        # The selection caret is what makes an option list a live dialog.
+        # Without it, "1. Yes, keep the current design" in a transcript --
+        # Claude answering a question with a numbered list -- reads as a
+        # prompt; and an answered prompt keeps its " 1. Yes" but loses the
+        # caret.
+        re.compile(CHROME + r"❯\s*1\.\s*Yes\b", re.M),
         re.compile(r"\(y/n\)\s*$", re.I | re.M),
         re.compile(CHROME + r"Press enter to continue\b", re.I | re.M),
         re.compile(CHROME + r"waiting for your input\b", re.I | re.M),
     )
+
+    # What the screen shows once a prompt has been answered: the turn moves
+    # on underneath it -- a tool result, a finished-turn stamp. A prompt
+    # still asking is the last thing drawn above its own options and the
+    # box.
+    SETTLED = re.compile(
+        r"^\s*⎿|[✻✽✢⋆*]\s*[A-Z][a-z]+ed\s+for\s+(?:\d+h\s*)?(?:\d+m\s*)?\d+s",
+        re.M)
 
     # "275.1k tokens"
     TOKENS = re.compile(r"([0-9.]+k)\s+tokens", re.I)
@@ -450,12 +484,11 @@ def classify(screen: str, commands: list[str], raw: str = "") -> dict:
         result["detail"] = agent.busy_detail(screen)
         return result
 
-    for pattern in agent.BLOCKED:
-        if pattern.search(screen):
-            result["state"] = NEEDS_YOU
-            result["label"] = LABELS[NEEDS_YOU]
-            result["detail"] = agent.blocked_detail(screen)
-            return result
+    if agent.blocked(screen):
+        result["state"] = NEEDS_YOU
+        result["label"] = LABELS[NEEDS_YOU]
+        result["detail"] = agent.blocked_detail(screen)
+        return result
 
     box = agent.input_box(screen, ghost_lines(raw) if raw else set())
 

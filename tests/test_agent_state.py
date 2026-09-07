@@ -54,6 +54,30 @@ CLAUDE = {
     "two prompts": (f"Do you want to make this edit?\n 1. Yes\n"
                     f"  ⎿ Updated main.py\n\n"
                     f"Do you want to run rm -rf build?\n 1. Yes\n{RULE}\n❯ \n{RULE}"),
+    # An answered prompt with nothing live below it: the turn moved on, and
+    # the session is sitting at an empty box. The prompt stays on screen for
+    # as long as 200 lines keep it, and it must not keep the session red.
+    "answered prompt": (f"Do you want to make this edit?\n 1. Yes\n"
+                        f"  ⎿ Updated main.py\n\n✻ Cooked for 12s\n"
+                        f"{RULE}\n❯ \n{RULE}\n  ⏵⏵ auto mode on"),
+    # The answered prompt matches a higher-priority pattern than the live
+    # one underneath. The quoted prompt must still be the live one.
+    "prompt after prompt": (f"Do you want to make this edit?\n 1. Yes\n"
+                            f"  ⎿ Updated main.py\n\n"
+                            f"Would you like to create teardown.sh?\n"
+                            f" 1. Yes\n{RULE}\n❯ \n{RULE}"),
+    # Claude answering a question with a numbered list -- prose, not a
+    # dialog. No selection caret, so it must not read as one.
+    "list in prose": (f"Should we keep the design?\n"
+                      f"  1. Yes, keep the current design\n"
+                      f"  2. No, rewrite it\n{RULE}\n❯ \n{RULE}\n"
+                      f"  ⏵⏵ auto mode on"),
+    # Typographic single quotes wrap onto a line start the same way the
+    # straight and double ones do.
+    "curly quoted prose": ("  I saw the prompt\n"
+                           "‘Do you want to run rm -rf build?’ earlier today.\n"
+                           f"{RULE}\n❯ Try \"fix the bug\"\n{RULE}\n"
+                           f"  ⏵⏵ auto mode on"),
 }
 
 CASES = [
@@ -73,6 +97,11 @@ CASES = [
     ("claude second prompt",  CLAUDE["two prompts"], ["claude"], A.NEEDS_YOU),
     ("claude boxed prompt",   CLAUDE["boxed prompt"], ["claude"], A.NEEDS_YOU),
     ("claude talking about one", CLAUDE["prose about prompts"], ["claude"], A.READY),
+    ("claude answered prompt", CLAUDE["answered prompt"], ["claude"], A.READY),
+    ("claude prompt after prompt", CLAUDE["prompt after prompt"],
+     ["claude"], A.NEEDS_YOU),
+    ("claude list in prose",  CLAUDE["list in prose"], ["claude"], A.READY),
+    ("claude curly quotes",   CLAUDE["curly quoted prose"], ["claude"], A.READY),
 
     # Not an agent at all.
     ("plain shell",          "opencode_idle.txt",  ["bash"],   A.SHELL),
@@ -148,6 +177,9 @@ def main() -> int:
          == "Do you want to proceed?"),
         ("and the prompt is the one still waiting",
          "rm -rf build" in A.classify(CLAUDE["two prompts"], ["claude"])["detail"]),
+        ("even when the answered one outranks it",
+         "teardown.sh" in A.classify(CLAUDE["prompt after prompt"],
+                                     ["claude"])["detail"]),
         ("draft and blocked both call for a human",
          A.needs_attention(A.DRAFT) and A.needs_attention(A.NEEDS_YOU)),
         ("working and idle do not",
