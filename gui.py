@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import queue
 import random
+import select
 import sys
 import threading
 import time
@@ -81,6 +82,12 @@ WATCH_INTERVAL = 1.0     # how often the far side re-dumps a screen
 WATCH_RETRY_MIN = 3.0
 WATCH_RETRY_MAX = 300.0
 WATCH_HEALTHY = 30.0     # a stream that lasted this long was not a refusal
+# The far side heartbeats every ~15s even when idle, so this much silence is
+# a dead channel, not a quiet one. It is the liveness ServerAliveInterval
+# cannot give: a mux client riding the user's ControlMaster ignores it, and
+# a master whose TCP died without an EOF would otherwise block the reader
+# forever.
+WATCH_STALL = 45.0
 # How long an unsent draft has to sit untouched before it is worth saying out
 # loud. Typing is a draft too -- see draft_settled().
 DRAFT_DWELL = 120.0
@@ -2514,20 +2521,34 @@ class Conn(Gtk.ApplicationWindow):
                     return
                 poke.clear()    # a check-again from before this connection
                 buffer: list[str] = []
+                pending = b""
                 try:
+                    fd = proc.stdout.fileno()
                     while not (self.stopping or halt.is_set()):
-                        line = proc.stdout.readline()
-                        if not line:
+                        # Bounded silence, not a blocking readline: past the
+                        # heartbeat allowance the channel is dead however
+                        # alive the process looks -- see WATCH_STALL.
+                        if not select.select([fd], [], [], WATCH_STALL)[0]:
                             break
-                        if line.startswith("###FRAME"):
-                            frame = hosts.parse_frame(buffer, host)
-                            buffer = []
-                            try:
-                                self.frames.put_nowait((host, frame))
-                            except queue.Full:
-                                pass
-                        else:
-                            buffer.append(line.rstrip("\n"))
+                        chunk = os.read(fd, 65536)
+                        if not chunk:
+                            break
+                        pending += chunk
+                        while b"\n" in pending:
+                            raw, _, pending = pending.partition(b"\n")
+                            line = raw.decode(errors="replace")
+                            if line.startswith(proc.frame):
+                                frame = hosts.parse_frame(buffer, host,
+                                                          proc.boundary)
+                                buffer = []
+                                try:
+                                    self.frames.put_nowait((host, frame))
+                                except queue.Full:
+                                    pass
+                            elif line.startswith(proc.alive):
+                                pass    # its arrival was its whole content
+                            else:
+                                buffer.append(line)
                 except (OSError, ValueError):
                     pass
                 finally:

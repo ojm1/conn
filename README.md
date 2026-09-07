@@ -92,8 +92,9 @@ change.
 
 One held-open `ssh` channel per host runs a loop that re-dumps each session's screen and only sends
 anything when it changed. Polling pays the network round trip on every check; this pays it once and
-then streams. An idle host costs nothing. A 45-second sweep covers what the stream doesn't: uptime,
-disk, mounts, and the session list.
+then streams. An idle host costs a heartbeat line every fifteen seconds -- which is also how the
+panel tells a quiet connection from one that has silently died, and reconnects. A 45-second sweep
+covers what the stream doesn't: uptime, disk, mounts, and the session list.
 
 `CONN_NO_WATCH=1` falls back to plain polling.
 

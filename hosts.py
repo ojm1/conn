@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -320,62 +321,93 @@ def remove_host(name: str) -> Path:
 # ---------------------------------------------------------------------------
 
 # One round trip collects everything the panel shows. Each section is opened
-# by a ###MARKER so the parse below cannot be confused by a value that happens
-# to contain a newline.
+# by a marker line so the parse below cannot be confused by a value that
+# happens to contain a newline -- and every marker carries __BOUND__, a random
+# token minted fresh for each run and never shown to the far side's screens.
+# The capture sections replay whatever a watched terminal chooses to display,
+# and a screen that merely *prints* marker text -- an editor open on this
+# file, an agent fed hostile output -- must not be able to end a section,
+# speak as another session, or forge one that does not exist.
+#
+# The pane list rides inside the capture loop, under the same guarded
+# markers, so the session name never shares a '|'-delimited line with fields
+# that are free to contain '|' themselves.
 REMOTE_PROBE = r"""
-echo "###UPTIME"; uptime -p 2>/dev/null || uptime 2>/dev/null
-echo "###LOAD";   cut -d' ' -f1-3 /proc/loadavg 2>/dev/null
-echo "###CPUS";   nproc 2>/dev/null
-echo "###MEM";    free -m 2>/dev/null | awk '/^Mem:/{print $3" "$2}'
-echo "###DISK";   df -h / 2>/dev/null | tail -1 | awk '{print $3" "$2" "$5}'
-echo "###TMUX";   tmux list-sessions -F "#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}" 2>/dev/null
-echo "###PANES";  tmux list-panes -a -F "#{session_name}|#{pane_current_command}|#{pane_current_path}" 2>/dev/null
-echo "###CAPTURE"
+echo "###__BOUND__:UPTIME"; uptime -p 2>/dev/null || uptime 2>/dev/null
+echo "###__BOUND__:LOAD";   cut -d' ' -f1-3 /proc/loadavg 2>/dev/null
+echo "###__BOUND__:CPUS";   nproc 2>/dev/null
+echo "###__BOUND__:MEM";    free -m 2>/dev/null | awk '/^Mem:/{print $3" "$2}'
+echo "###__BOUND__:DISK";   df -h / 2>/dev/null | tail -1 | awk '{print $3" "$2" "$5}'
+echo "###__BOUND__:TMUX";   tmux list-sessions -F "#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}" 2>/dev/null
+echo "###__BOUND__:CAPTURE"
 tmux list-sessions -F "#{session_name}" 2>/dev/null | while read -r s; do
-  echo "@@@SESSION:$s"
+  echo "@@@__BOUND__:SESSION:$s"
   tmux capture-pane -p -e -t "$s" 2>/dev/null | tail -__CAPLINES__
+  echo "@@@__BOUND__:PANES:$s"
+  tmux list-panes -t "$s" -F "#{pane_current_command}|#{pane_current_path}" 2>/dev/null
 done
-echo "###END"
+echo "###__BOUND__:END"
 """
 
-SECTIONS = ("UPTIME", "LOAD", "CPUS", "MEM", "DISK", "TMUX", "PANES", "CAPTURE", "END")
+SECTIONS = ("UPTIME", "LOAD", "CPUS", "MEM", "DISK", "TMUX", "CAPTURE", "END")
 
 
-def _split_captures(text: str) -> dict[str, str]:
-    """Pull the per-session screen grabs out of the raw probe output.
+def _split_captures(text: str, token: str) -> tuple[dict[str, str],
+                                                    dict[str, list[dict]]]:
+    """Pull the per-session screen grabs and pane lists out of the raw probe
+    output, keyed by session name.
 
-    Unlike every other section these must survive verbatim: blank lines and
-    leading spaces are part of what makes a terminal screen readable, and the
-    state classifier reads them. capture-pane runs with -e so they keep their
-    colour too: dim is the only thing telling a suggestion sitting in the
-    input box apart from something you typed and left there.
+    Unlike every other section the screens must survive verbatim: blank lines
+    and leading spaces are part of what makes a terminal screen readable, and
+    the state classifier reads them. capture-pane runs with -e so they keep
+    their colour too: dim is the only thing telling a suggestion sitting in
+    the input box apart from something you typed and left there.
+
+    A pane line is command then path. The command goes first because it is
+    the one the classifier depends on, and a path is the field with '|' in
+    the wild -- partition keeps whatever follows the first '|' as the path,
+    '|'s and all.
     """
-    start = text.find("###CAPTURE")
+    start = text.find(f"###{token}:CAPTURE")
     if start < 0:
-        return {}
-    body = text[start + len("###CAPTURE"):]
-    end = body.find("###END")
+        return {}, {}
+    body = text[start:]
+    end = body.find(f"###{token}:END")
     if end >= 0:
         body = body[:end]
 
+    session_mark = f"@@@{token}:SESSION:"
+    panes_mark = f"@@@{token}:PANES:"
     screens: dict[str, list[str]] = {}
+    panes: dict[str, list[dict]] = {}
     current = None
+    mode = None
     for line in body.splitlines():
-        if line.startswith("@@@SESSION:"):
-            current = line[len("@@@SESSION:"):].strip()
-            screens[current] = []
-        elif current is not None:
+        if line.startswith(session_mark):
+            current = line[len(session_mark):].strip()
+            screens.setdefault(current, [])
+            mode = "screen"
+        elif line.startswith(panes_mark):
+            current = line[len(panes_mark):].strip()
+            panes.setdefault(current, [])
+            mode = "panes"
+        elif current is not None and mode == "screen":
             screens[current].append(line.rstrip())
-    return {name: "\n".join(lines).strip("\n") for name, lines in screens.items()}
+        elif current is not None and mode == "panes" and line.strip():
+            cmd, _, path = line.partition("|")
+            panes[current].append({"cmd": cmd, "path": path})
+    return ({name: "\n".join(lines).strip("\n")
+             for name, lines in screens.items()}, panes)
 
 
-def _split_sections(text: str) -> dict[str, list[str]]:
+def _split_sections(text: str, token: str) -> dict[str, list[str]]:
     found: dict[str, list[str]] = {name: [] for name in SECTIONS}
+    prefix = f"###{token}:"
     current = None
-    for line in text.split("###CAPTURE")[0].splitlines():
+    for line in text.split(f"{prefix}CAPTURE")[0].splitlines():
         stripped = line.strip()
-        if stripped.startswith("###") and stripped[3:] in found:
-            current = stripped[3:]
+        if stripped.startswith(prefix) and stripped[len(prefix):] in found:
+            current = stripped[len(prefix):]
             continue
         if current and stripped:
             found[current].append(stripped)
@@ -399,7 +431,9 @@ def probe(host: str) -> dict:
     row["mounted"] = is_mounted(host)
     row["checked"] = time.time()
 
-    script = REMOTE_PROBE.replace("__CAPLINES__", str(CAPTURE_LINES))
+    token = secrets.token_hex(16)
+    script = (REMOTE_PROBE.replace("__CAPLINES__", str(CAPTURE_LINES))
+                          .replace("__BOUND__", token))
     try:
         done = subprocess.run(
             run_argv(host, opts=["-o", "StrictHostKeyChecking=accept-new"]),
@@ -414,7 +448,7 @@ def probe(host: str) -> dict:
         row["error"] = str(exc)
         return row
 
-    if "###END" not in done.stdout:
+    if f"###{token}:END" not in done.stdout:
         stderr = (done.stderr or "").strip().splitlines()
         last = stderr[-1] if stderr else "unreachable"
         # Reaching the box but being refused is a different problem from the
@@ -426,7 +460,7 @@ def probe(host: str) -> dict:
         row["error"] = last
         return row
 
-    parts = _split_sections(done.stdout)
+    parts = _split_sections(done.stdout, token)
     row["state"] = "up"
     row["uptime"] = _first(parts["UPTIME"]).removeprefix("up ")
     row["load"] = _first(parts["LOAD"])
@@ -440,16 +474,12 @@ def probe(host: str) -> dict:
     if len(disk) == 3:
         row["disk"] = f"{disk[0]} / {disk[1]} ({disk[2]})"
 
-    panes: dict[str, list[dict]] = {}
-    for line in parts["PANES"]:
-        bits = line.split("|")
-        if len(bits) == 3:
-            panes.setdefault(bits[0], []).append({"cmd": bits[1], "path": bits[2]})
-
-    screens = _split_captures(done.stdout)
+    screens, panes = _split_captures(done.stdout, token)
     mine = own_session() if is_local(host) else ""
     for line in parts["TMUX"]:
-        bits = line.split("|")
+        # From the right: the name is the one field free to contain '|', and
+        # it comes first, so the three fixed fields are peeled off the end.
+        bits = line.rsplit("|", 3)
         if len(bits) < 3:
             continue
         name = bits[0]
@@ -716,19 +746,34 @@ def wait_launch_error(since: float, timeout: float = 6.0) -> str:
 # only speaks when something actually changed. One held-open ssh channel beats
 # polling: a poll pays the round trip on every single check,
 # while this pays it once and then streams.
+#
+# The markers carry the same per-invocation token as the probe's, for the
+# same reason: a frame boundary a watched screen can print is a frame
+# boundary it can forge. The ALIVE line every ~15 ticks is the liveness the
+# transport cannot give -- ServerAliveInterval is ignored when ssh is a mux
+# client riding the user's ControlMaster, so a master whose TCP has silently
+# died leaves the reader waiting on a pipe that will never speak again. The
+# heartbeat makes silence finite: a reader that has heard nothing for a few
+# beats knows the channel is dead, not idle.
 WATCH_SCRIPT = r"""
 last=""
+beat=0
 while :; do
   out=$(tmux list-sessions -F "#{session_name}" 2>/dev/null | while read -r s; do
-          echo "@@@SESSION:$s"
+          echo "@@@__BOUND__:SESSION:$s"
           tmux capture-pane -p -e -t "$s" 2>/dev/null | tail -__CAPLINES__
-          echo "@@@PANES:$s"
+          echo "@@@__BOUND__:PANES:$s"
           tmux list-panes -t "$s" -F "#{pane_current_command}" 2>/dev/null
         done)
   now=$(printf '%s' "$out" | cksum)
   if [ "$now" != "$last" ]; then
     last=$now
-    printf '%s\n###FRAME\n' "$out"
+    printf '%s\n###__BOUND__:FRAME\n' "$out"
+  fi
+  beat=$((beat+1))
+  if [ "$beat" -ge 15 ]; then
+    beat=0
+    echo "###__BOUND__:ALIVE"
   fi
   sleep __INTERVAL__
 done
@@ -741,40 +786,60 @@ def watch_screens(host: str, interval: float = 1.0) -> subprocess.Popen:
     stdin carries the script and nothing else -- it is a pipe of ours, never
     the terminal, so ssh cannot compete with the panel for keystrokes the way
     an inherited stdin used to let it.
+
+    The process comes back carrying its invocation's marker strings: `frame`
+    ends a frame, `alive` is the idle heartbeat, and `boundary` is the token
+    parse_frame needs. They live on the handle because they are only good for
+    this one stream -- the next connection mints its own.
+
+    stdout is a raw, unbuffered pipe. The reader select()s on the fd to put a
+    ceiling on silence, and a buffered text wrapper would hold lines a select
+    on the fd can no longer see.
     """
+    token = secrets.token_hex(16)
     script = (WATCH_SCRIPT.replace("__INTERVAL__", str(interval))
-                          .replace("__CAPLINES__", str(CAPTURE_LINES)))
+                          .replace("__CAPLINES__", str(CAPTURE_LINES))
+                          .replace("__BOUND__", token))
     proc = subprocess.Popen(
         run_argv(host, opts=["-o", "ServerAliveInterval=15"]),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        text=True, bufsize=1)
+        bufsize=0)
     try:
-        proc.stdin.write(script)
+        proc.stdin.write(script.encode())
         proc.stdin.close()
     except OSError:
         pass        # died at spawn: the reader sees EOF and backs off
+    proc.boundary = token
+    proc.frame = f"###{token}:FRAME"
+    proc.alive = f"###{token}:ALIVE"
     return proc
 
 
-def parse_frame(lines: list[str], host: str = "") -> dict[str, dict]:
+def parse_frame(lines: list[str], host: str = "",
+                token: str = "") -> dict[str, dict]:
     """One frame -> {session: {"screen": str, "commands": [str]}}.
+
+    `token` is the boundary the frame arrived under -- proc.boundary from the
+    watch_screens that produced it. A marker without it is screen content.
 
     Our own session is dropped here too, not just in probe(). The panel treats
     "the stream and the probe disagree about which sessions exist" as a session
     having appeared, so filtering one and not the other would re-probe on every
     single frame.
     """
+    session_mark = f"@@@{token}:SESSION:"
+    panes_mark = f"@@@{token}:PANES:"
     sessions: dict[str, dict] = {}
     current = None
     mode = None
     for line in lines:
-        if line.startswith("@@@SESSION:"):
-            current = line[len("@@@SESSION:"):].strip()
+        if line.startswith(session_mark):
+            current = line[len(session_mark):].strip()
             sessions.setdefault(current, {"screen": [], "commands": []})
             mode = "screen"
-        elif line.startswith("@@@PANES:"):
-            current = line[len("@@@PANES:"):].strip()
+        elif line.startswith(panes_mark):
+            current = line[len(panes_mark):].strip()
             sessions.setdefault(current, {"screen": [], "commands": []})
             mode = "commands"
         elif current and mode == "screen":
