@@ -2209,7 +2209,29 @@ class Conn(Gtk.ApplicationWindow):
         The sessions are tmux and outlive this process, which is what makes
         replacing it in place reasonable rather than alarming: the views close
         and come back, and nothing running in them notices.
+
+        exec replaces this process but not its children. A watcher ssh left
+        behind holds its connection -- and the capture loop on the far side --
+        until the remote next speaks, which for an idle host is never, so
+        each restart would double the streams to every quiet starred host.
+        The watchers come down first, with a moment for the threads to finish
+        the job.
+
+        Through the installed launcher when this is the installed copy, so a
+        changed bin/conn takes effect too. A checkout run some other way
+        restarts the way it was started.
         """
+        self.shut_down()
+        deadline = time.monotonic() + 2.0
+        for thread, _halt, _poke in list(self.streams.values()):
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        launcher = Path.home() / ".local" / "bin" / "conn"
+        installed = Path.home() / ".local" / "share" / "conn" / "app"
+        if APP_DIR == installed.resolve() and os.access(launcher, os.X_OK):
+            try:
+                os.execv(str(launcher), [str(launcher)])
+            except OSError:
+                pass
         os.execv(sys.executable, [sys.executable, str(APP_DIR / "main.py")])
 
     def check_source(self) -> None:
