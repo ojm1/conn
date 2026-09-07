@@ -7,8 +7,12 @@ away. None of those are visible to a test of hosts.py, and all of them are one
 assertion each here.
 
 Needs a display, because GTK needs one -- it skips rather than fails without.
-Real tmux sessions are created on this machine and killed again at the end;
-nothing remote is touched.
+Real tmux sessions are created on this machine and killed again at the end.
+The run is pointed at an ssh config, star file, zoom file and mount root of
+its own before the window is built, so nothing remote is touched and nothing
+of yours is rewritten. The one check against real user state -- the keyring
+round trip -- only runs with CONN_TEST_KEYRING=1, and clears what it stored
+either way.
 
     python3 tests/test_gui.py
 """
@@ -69,6 +73,19 @@ def main() -> int:
         print("skipped: no display, and GTK needs one")
         return 0
 
+    import tempfile
+
+    # The window probes every host its config lists and writes stars and zoom
+    # where the module constants point, so the fences go up before anything
+    # is imported or built: a config of our own -- only "local" is listed,
+    # so no ssh ever leaves this machine -- state files of our own, and a
+    # mount root of our own for the tidy_mounts() run at construction.
+    keep = tempfile.TemporaryDirectory(prefix="conn-test-",
+                                       ignore_cleanup_errors=True)
+    state = Path(keep.name)
+    (state / "config").write_text("")
+    os.environ["CONN_SSH_CONFIG"] = str(state / "config")
+
     import gi
     gi.require_version("Gtk", "4.0")
     gi.require_version("Gdk", "4.0")
@@ -78,6 +95,10 @@ def main() -> int:
     import agent_state
     import gui
     import hosts
+
+    gui.STARS_STATE = state / "starred"
+    gui.ZOOM_STATE = state / "zoom"
+    hosts.MNT_ROOT = state / "mnt"
 
     check = Checks()
     for name in SESSIONS:
@@ -121,6 +142,7 @@ def main() -> int:
 
     for name in (*SESSIONS, NEW_SESSION):
         tmux("kill-session", "-t", name)
+    keep.cleanup()
 
     print(f"\n{'all good' if not check.failures else str(check.failures) + ' failed'}")
     return 1 if check.failures else 0
@@ -383,17 +405,20 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
               == "Fira Code 12")
         del os.environ["CONN_FONT"]
 
-        gui.ZOOM_STATE = Path(tmp) / "zoom"
-        window.set_zoom(1.3)
-        scales = [s.term.get_font_scale() for s in window.open.values()]
-        check("zooming resizes every open session", scales and
-              all(abs(scale - 1.3) < 0.001 for scale in scales), f"scales={scales}")
-        check("and it survives the next run", abs(gui.read_zoom() - 1.3) < 0.001,
-              f"read={gui.read_zoom()}")
-        window.set_zoom(99.0)
-        check("nothing can be zoomed off the screen", window.zoom == gui.ZOOM_MAX,
-              f"zoom={window.zoom}")
-        window.set_zoom(1.0)
+        was_zoom, gui.ZOOM_STATE = gui.ZOOM_STATE, Path(tmp) / "zoom"
+        try:
+            window.set_zoom(1.3)
+            scales = [s.term.get_font_scale() for s in window.open.values()]
+            check("zooming resizes every open session", scales and
+                  all(abs(scale - 1.3) < 0.001 for scale in scales), f"scales={scales}")
+            check("and it survives the next run", abs(gui.read_zoom() - 1.3) < 0.001,
+                  f"read={gui.read_zoom()}")
+            window.set_zoom(99.0)
+            check("nothing can be zoomed off the screen", window.zoom == gui.ZOOM_MAX,
+                  f"zoom={window.zoom}")
+            window.set_zoom(1.0)
+        finally:
+            gui.ZOOM_STATE = was_zoom
 
     # -- killing -----------------------------------------------------------
     kills = [c for c in walk(row_for(window, alpha))
@@ -591,7 +616,6 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     check("two full-width lines are not glued into one",
           hosts.screen_links("a" * 130 + "\n" + "b" * 130 + "\n") == [])
 
-    # -- secrets -----------------------------------------------------------
     # -- forgetting a server ------------------------------------------------
     # Against a config of our own: the real one is not a fixture, and this
     # rewrites the file it is pointed at.
@@ -707,13 +731,25 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
         finally:
             hosts.MNT_ROOT = was
 
-    hosts.secret_store("conntest-host", "db", "pa55w0rd")
-    check("a secret goes into the keyring",
-          hosts.secret_names("conntest-host") == ["db"])
-    check("and comes back out by name",
-          hosts.secret_value("conntest-host", "db") == "pa55w0rd")
-    hosts.secret_clear("conntest-host", "db")
-    check("and can be forgotten", hosts.secret_names("conntest-host") == [])
+    # -- secrets, in the real keyring ---------------------------------------
+    # The one check that touches real user state, so it is opt-in: it proves
+    # the secret-tool plumbing against the actual daemon, which no fake can.
+    # The entry is cleared on the way out whatever the verdicts were.
+    if os.environ.get("CONN_TEST_KEYRING") == "1":
+        try:
+            hosts.secret_store("conntest-host", "db", "pa55w0rd")
+            check("a secret goes into the keyring",
+                  hosts.secret_names("conntest-host") == ["db"])
+            check("and comes back out by name",
+                  hosts.secret_value("conntest-host", "db") == "pa55w0rd")
+        finally:
+            try:
+                hosts.secret_clear("conntest-host", "db")
+            except (hosts.HostError, OSError):
+                pass
+        check("and can be forgotten", hosts.secret_names("conntest-host") == [])
+    else:
+        print("keyring round trip skipped -- CONN_TEST_KEYRING=1 runs it")
 
 
 def rows(window):
