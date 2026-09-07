@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 USAGE = """conn -- your servers, and what is running on them
@@ -37,6 +38,12 @@ overrides it, and ctrl-+ / ctrl-- / ctrl-0 zoom, remembered between runs.
 CONN_THEME=light|dark forces the colours.
 """
 
+# --check prints strings a remote can influence: ssh's auth banner lands in
+# row['error'], and a session is named whatever the far side called it. This
+# goes to a terminal, which obeys control characters -- an OSC can retitle
+# the window, or write the clipboard where OSC 52 is on -- so none survive.
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
 
 def main(argv: list[str]) -> int:
     import hosts
@@ -65,9 +72,10 @@ def main(argv: list[str]) -> int:
             for host in names:
                 row = hosts.probe(host)
                 sessions = ", ".join(s["name"] for s in row["sessions"]) or "-"
-                print(f"{host:<20} {row['state']:<8} {sessions:<24} "
-                      f"{row['target']}"
-                      + (f"  ({row['error']})" if row["error"] else ""))
+                print(CONTROL.sub("", f"{host:<20} {row['state']:<8} "
+                                      f"{sessions:<24} {row['target']}"
+                                  + (f"  ({row['error']})"
+                                     if row["error"] else "")))
             return 0
 
         if arg == "--notify":

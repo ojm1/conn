@@ -15,6 +15,16 @@ set -uo pipefail
 host=${1:?usage: ssh-connect <host> [session-name]}
 session=${2:-claude}
 
+# The host lands inside the remote command string and in a cache file name,
+# so a name that needs quoting is refused rather than rewritten -- silently
+# fixing it up would connect somewhere the user did not type. The session
+# name is different: tmux is going to create whatever we ask for, so a
+# filtered name still names the session you get.
+if [[ ! $host =~ ^[A-Za-z0-9_.][A-Za-z0-9_.-]*$ ]]; then
+  printf 'ssh-connect: unusable host name: %q\n' "$host" >&2
+  exit 2
+fi
+
 # Keep the session name shell-safe
 session=${session//[^A-Za-z0-9_-]/_}
 
@@ -50,7 +60,7 @@ has_mosh_server() {
   fi
 
   local answer=no
-  if ssh -o BatchMode=yes -o ConnectTimeout=6 "$1" \
+  if ssh -o BatchMode=yes -o ConnectTimeout=6 -- "$1" \
        'command -v mosh-server >/dev/null 2>&1' 2>/dev/null; then
     answer=yes
   fi
@@ -71,7 +81,7 @@ if [[ ${SSH_CONNECT_NO_MOSH:-0} != 1 ]] && command -v mosh >/dev/null 2>&1 \
    && has_mosh_server "$host"; then
   mosh "$host" -- bash -lc "$remote" 2> >(tee "$errors" >&2)
 else
-  ssh -t "$host" "$remote" 2> >(tee "$errors" >&2)
+  ssh -t -- "$host" "$remote" 2> >(tee "$errors" >&2)
 fi
 status=$?
 

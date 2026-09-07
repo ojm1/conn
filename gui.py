@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import queue
 import random
+import re
 import select
 import sys
 import threading
@@ -129,6 +130,35 @@ MARKS = {
 }
 
 
+# What may reach the notification daemon. The title carries a remote-chosen
+# session name and the body a line read off a remote screen, and whatever
+# renders them is not a terminal conn controls: control characters -- C0 and
+# C1 both, which also beheads any escape sequence -- have no business there,
+# and neither does unbounded length.
+NOTIFY_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def notify_text(text: str, limit: int = 120) -> str:
+    return NOTIFY_UNSAFE.sub("", text)[:limit]
+
+
+def session_ref(host: str, name: str) -> str:
+    """One string naming one session, host first, joined with a tab.
+
+    Tab, because it is the one separator a host alias cannot contain.
+    'conn-{host}-{session}' let web/1-deploy collide with web-1/deploy, and
+    a notification id two sessions share is a click that can be redirected.
+    Used for both the notification id and its action target; split_ref is
+    the way back.
+    """
+    return f"{host}\t{name}"
+
+
+def split_ref(ref: str) -> tuple[str, str]:
+    host, _, name = ref.partition("\t")
+    return host, name
+
+
 def notification(host: str, session: dict) -> "Gio.Notification":
     """The notification for one session, wherever it is being sent from.
 
@@ -136,8 +166,8 @@ def notification(host: str, session: dict) -> "Gio.Notification":
     exactly what the panel sends -- same icon, same priority, same action --
     instead of an imitation that proves nothing.
     """
-    note = Gio.Notification.new(f"{host}/{session['name']}")
-    detail = session["agent"]["detail"]
+    note = Gio.Notification.new(f"{host}/{notify_text(session['name'], 60)}")
+    detail = notify_text(session["agent"]["detail"])
     note.set_body(f"{session['agent']['label']}"
                   + (f" -- {detail}" if detail else ""))
     # Our own icon rather than whatever the shell picks for an unknown sender.
@@ -151,7 +181,8 @@ def notification(host: str, session: dict) -> "Gio.Notification":
     # Clicking it opens the session it is about, which is the only thing
     # anyone wants from a notification like this.
     note.set_default_action_and_target(
-        "app.open-session", GLib.Variant("s", f"{host}\t{session['name']}"))
+        "app.open-session",
+        GLib.Variant("s", session_ref(host, session["name"])))
     return note
 
 
@@ -2100,7 +2131,8 @@ class Conn(Gtk.ApplicationWindow):
 
     def notify(self, host: str, session: dict) -> None:
         self.get_application().send_notification(
-            f"conn-{host}-{session['name']}", notification(host, session))
+            f"conn-{session_ref(host, session['name'])}",
+            notification(host, session))
 
     def repaint(self) -> None:
         """Same rows, new words: marks, states and which ones are open."""
@@ -2657,8 +2689,9 @@ class ConnApp(Gtk.Application):
                                                        agent_state.DRAFT)),
                            sessions[0])
             def send():
-                self.send_notification(f"conn-{hosts.LOCAL}-{session['name']}",
-                                       notification(hosts.LOCAL, session))
+                self.send_notification(
+                    f"conn-{session_ref(hosts.LOCAL, session['name'])}",
+                    notification(hosts.LOCAL, session))
                 return GLib.SOURCE_REMOVE
             GLib.idle_add(send)
         threading.Thread(target=work, name="notify-test", daemon=True).start()
@@ -2671,7 +2704,7 @@ class ConnApp(Gtk.Application):
         the action arrives first and do_activate() never runs. Returning early
         when there was no window was why clicking did nothing at all.
         """
-        host, _, name = target.get_string().partition("\t")
+        host, name = split_ref(target.get_string())
         window = self.window()
         window.present()
         window.open_session(host, name)

@@ -108,6 +108,17 @@ def run_argv(host: str, opts: list[str] | None = None) -> list[str]:
 # ~/.ssh/config
 # ---------------------------------------------------------------------------
 
+def _usable_alias(name: str) -> bool:
+    """Whether a config alias is one the panel can act on.
+
+    Wildcards are patterns, not hosts. A slash is dropped too -- MNT_ROOT /
+    host would follow it out of the mountpoint tree -- and so is a leading
+    dash, which reads as an option to ssh, sshfs and everything else an
+    alias is handed to.
+    """
+    return not re.search(r"[*?!/]", name) and not name.startswith("-")
+
+
 def list_hosts() -> list[str]:
     """Host aliases in the order they appear in the config.
 
@@ -124,7 +135,7 @@ def list_hosts() -> list[str]:
         parts = line.strip().split()
         if len(parts) >= 2 and parts[0].lower() == "host":
             for name in parts[1:]:
-                if not re.search(r"[*?!]", name) and name not in names:
+                if _usable_alias(name) and name not in names:
                     names.append(name)
 
     # This machine leads the list: it is the one host that is always up, and
@@ -193,10 +204,24 @@ def add_host(name: str, hostname: str, user: str, port: str = "22") -> Path:
     user = user.strip()
     port = (port or "22").strip()
 
-    if not name or re.search(r"[*?!\s]", name):
-        raise HostError("Name must be a single word with no * ? or spaces.")
+    # These values become lines in a file whose directives run commands
+    # (ProxyCommand), and the alias is later a shell argument and a path
+    # segment -- so what cannot be written safely is refused, not quoted.
+    # A pasted "hostname" with a newline in it was one ProxyCommand away
+    # from local code execution.
+    if not re.fullmatch(r"[A-Za-z0-9_.][A-Za-z0-9_.-]*", name):
+        raise HostError("Name must be one word of letters, digits, . _ or -, "
+                        "not starting with a dash.")
     if not hostname:
         raise HostError("Hostname or IP is required.")
+    if (re.search(r"[^A-Za-z0-9_.:%-]", hostname)
+            or hostname.startswith("-")):
+        raise HostError("Hostname can only use letters, digits and . : % _ -, "
+                        "and cannot start with a dash.")
+    if user and (re.search(r"[^A-Za-z0-9_.@-]", user)
+                 or user.startswith("-")):
+        raise HostError("User can only use letters, digits and . @ _ -, "
+                        "and cannot start with a dash.")
     if name in list_hosts():
         raise HostError(f"'{name}' is already in ~/.ssh/config.")
     if not port.isdigit():
@@ -250,7 +275,7 @@ def config_hosts() -> list[str]:
         parts = line.strip().split()
         if len(parts) >= 2 and parts[0].lower() == "host":
             for name in parts[1:]:
-                if not re.search(r"[*?!]", name) and name not in names:
+                if _usable_alias(name) and name not in names:
                     names.append(name)
     return names
 
@@ -341,9 +366,9 @@ echo "###__BOUND__:DISK";   df -h / 2>/dev/null | tail -1 | awk '{print $3" "$2"
 echo "###__BOUND__:TMUX";   tmux list-sessions -F "#{session_name}|#{session_windows}|#{?session_attached,attached,detached}|#{session_activity}" 2>/dev/null
 echo "###__BOUND__:CAPTURE"
 tmux list-sessions -F "#{session_name}" 2>/dev/null | while read -r s; do
-  echo "@@@__BOUND__:SESSION:$s"
+  printf '%s\n' "@@@__BOUND__:SESSION:$s"
   tmux capture-pane -p -e -t "$s" 2>/dev/null | tail -__CAPLINES__
-  echo "@@@__BOUND__:PANES:$s"
+  printf '%s\n' "@@@__BOUND__:PANES:$s"
   tmux list-panes -t "$s" -F "#{pane_current_command}|#{pane_current_path}" 2>/dev/null
 done
 echo "###__BOUND__:END"
@@ -769,9 +794,9 @@ last=""
 beat=0
 while :; do
   out=$(tmux list-sessions -F "#{session_name}" 2>/dev/null | while read -r s; do
-          echo "@@@__BOUND__:SESSION:$s"
+          printf '%s\n' "@@@__BOUND__:SESSION:$s"
           tmux capture-pane -p -e -t "$s" 2>/dev/null | tail -__CAPLINES__
-          echo "@@@__BOUND__:PANES:$s"
+          printf '%s\n' "@@@__BOUND__:PANES:$s"
           tmux list-panes -t "$s" -F "#{pane_current_command}" 2>/dev/null
         done)
   now=$(printf '%s' "$out" | cksum)
@@ -1126,5 +1151,9 @@ def copy_key(host: str) -> None:
     rather than being run headless behind the panel."""
     if is_local(host):
         raise HostError("local is this machine -- no key needed.")
+    # The alias travels as an argument, never inside the -c string: it is
+    # data from the config, and bash would run whatever it contained.
     launch(["bash", "-lc",
-            f"ssh-copy-id {host}; echo; read -rsn1 -p 'Press any key to close...'"])
+            'ssh-copy-id -- "$1"; echo; '
+            "read -rsn1 -p 'Press any key to close...'",
+            "ssh-copy-id", host])
