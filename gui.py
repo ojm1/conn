@@ -488,9 +488,11 @@ class Conn(Gtk.ApplicationWindow):
         # The ssh is held back until check_agent() says there is a key to
         # ride, so a fresh boot does not put up one passphrase prompt per
         # connection. See connect_hosts().
-        # Once, at startup. A mountpoint with nothing on it is left by a
-        # failed mount or by a reboot, and it looks like a mount that worked.
-        hosts.tidy_mounts()
+        # Once, at startup, and off the main loop -- the window should come
+        # up whatever state the mounts are in. A mountpoint with nothing on
+        # it is left by a failed mount, and it looks like a mount that worked.
+        threading.Thread(target=hosts.tidy_mounts,
+                         name="tidy-mounts", daemon=True).start()
 
         self.holding = True
         self.load_hosts(connect=False)
@@ -859,6 +861,22 @@ class Conn(Gtk.ApplicationWindow):
             for name in names:
                 listing.append(entry_row(name))
 
+        def fetch(name: str, landed) -> None:
+            # On a worker: secret-tool waits on the keyring, which can put up
+            # an unlock prompt of its own, and the main loop must not wait
+            # with it. The value comes back to the main loop when it comes.
+            def work():
+                try:
+                    value = hosts.secret_value(host, name)
+                except (hosts.HostError, OSError) as exc:
+                    GLib.idle_add(self.complain, f"{host}/{name}", str(exc))
+                    return
+                def deliver():
+                    landed(value)
+                    return GLib.SOURCE_REMOVE
+                GLib.idle_add(deliver)
+            threading.Thread(target=work, daemon=True).start()
+
         def entry_row(name: str) -> Gtk.Widget:
             line = Gtk.Box(spacing=8, margin_top=4, margin_bottom=4)
             title = Gtk.Label(label=name, xalign=0)
@@ -875,12 +893,10 @@ class Conn(Gtk.ApplicationWindow):
 
             def toggle(_button):
                 if reveal.get_label() == "Show":
-                    try:
-                        shown.set_label(hosts.secret_value(host, name))
-                    except hosts.HostError as exc:
-                        self.complain(f"{host}/{name}", str(exc))
-                        return
-                    reveal.set_label("Hide")
+                    def landed(value):
+                        shown.set_label(value)
+                        reveal.set_label("Hide")
+                    fetch(name, landed)
                 else:
                     shown.set_label("\u2022" * 8)
                     reveal.set_label("Show")
@@ -891,22 +907,19 @@ class Conn(Gtk.ApplicationWindow):
             copy = Gtk.Button(label="Copy")
 
             def to_clipboard(_button):
-                try:
-                    value = hosts.secret_value(host, name)
-                except hosts.HostError as exc:
-                    self.complain(f"{host}/{name}", str(exc))
-                    return
-                clipboard = Gdk.Display.get_default().get_clipboard()
-                clipboard.set(value)
-                copy.set_label("Copied")
-                # Cleared again shortly: a password left on the clipboard is
-                # readable by anything that asks for it.
-                def wipe():
-                    if clipboard.get_content() is not None:
-                        clipboard.set("")
-                    copy.set_label("Copy")
-                    return False
-                GLib.timeout_add_seconds(30, wipe)
+                def landed(value):
+                    clipboard = Gdk.Display.get_default().get_clipboard()
+                    clipboard.set(value)
+                    copy.set_label("Copied")
+                    # Cleared again shortly: a password left on the clipboard
+                    # is readable by anything that asks for it.
+                    def wipe():
+                        if clipboard.get_content() is not None:
+                            clipboard.set("")
+                        copy.set_label("Copy")
+                        return False
+                    GLib.timeout_add_seconds(30, wipe)
+                fetch(name, landed)
 
             copy.connect("clicked", to_clipboard)
             line.append(copy)
@@ -1090,16 +1103,24 @@ class Conn(Gtk.ApplicationWindow):
         offer is made here rather than left as a second errand. It is a
         separate button rather than a checkbox because GTK's alert dialog has
         no room for one, and three plain choices read better than a form.
-        """
-        try:
-            secrets = hosts.secret_names(host)
-        except (hosts.HostError, OSError):
-            secrets = []
 
+        The keyring is asked on a worker -- secret-tool can sit waiting on
+        it, and a right-click must not freeze the window -- so the dialog
+        appears when the count is in.
+        """
+        def count():
+            try:
+                secrets = len(hosts.secret_names(host))
+            except (hosts.HostError, OSError):
+                secrets = 0
+            GLib.idle_add(self._ask_forget, host, secrets)
+        threading.Thread(target=count, daemon=True).start()
+
+    def _ask_forget(self, host: str, secrets: int) -> bool:
         buttons = ["Cancel", "Forget server"]
         if secrets:
-            buttons.append(f"Forget server and {len(secrets)} password"
-                           + ("s" if len(secrets) > 1 else ""))
+            buttons.append(f"Forget server and {secrets} password"
+                           + ("s" if secrets > 1 else ""))
 
         dialog = Gtk.AlertDialog()
         dialog.set_message(f"Forget {host}?")
@@ -1120,6 +1141,7 @@ class Conn(Gtk.ApplicationWindow):
                 self.forget_host(host, passwords=choice == 2)
 
         dialog.choose(self, None, answered)
+        return GLib.SOURCE_REMOVE
 
     def forget_host(self, host: str, passwords: bool = False) -> None:
         """Remove a server, and everything this window was holding for it."""
@@ -1128,25 +1150,6 @@ class Conn(Gtk.ApplicationWindow):
         except (hosts.HostError, OSError) as exc:
             self.complain(f"Could not forget {host}", str(exc))
             return
-
-        # A server you have forgotten should not keep a folder in ~/mnt. If it
-        # is mounted, unmount first -- ssh-mount takes the directory with it --
-        # and tidy up after either way.
-        if not hosts.is_local(host) and hosts.is_mounted(host):
-            try:
-                hosts.unmount(host)
-            except (hosts.HostError, OSError):
-                pass    # still busy; tidy_mounts() will get it another day
-        hosts.tidy_mounts()
-
-        cleared = 0
-        if passwords:
-            for name in hosts.secret_names(host):
-                try:
-                    hosts.secret_clear(host, name)
-                    cleared += 1
-                except (hosts.HostError, OSError):
-                    pass    # one stubborn entry is not worth losing the rest
 
         # The views for it go too. The tmux sessions on the far side keep
         # running -- forgetting a server is not killing anything on it -- but
@@ -1167,10 +1170,41 @@ class Conn(Gtk.ApplicationWindow):
             save_stars(self.starred)
 
         self.load_hosts()
-        said = f"forgot {host}"
-        if cleared:
-            said += f" and {cleared} password" + ("s" if cleared > 1 else "")
-        self.notice(f"{said} -- old config kept at {backup.name}")
+        self.notice(f"forgot {host} -- old config kept at {backup.name}")
+
+        # A server you have forgotten should not keep a mountpoint or its
+        # keyring entries. On a worker, like do_mount(): fusermount blocks
+        # for seconds on a busy mount and secret-tool waits on the keyring,
+        # and the window freezing is not part of forgetting a server. The
+        # footer says how it went when it is done.
+        def tidy():
+            unmount_error = ""
+            if not hosts.is_local(host) and hosts.is_mounted(host):
+                try:
+                    hosts.unmount(host)
+                except (hosts.HostError, OSError) as exc:
+                    unmount_error = str(exc)
+            hosts.tidy_mounts()
+
+            cleared = 0
+            if passwords:
+                for name in hosts.secret_names(host):
+                    try:
+                        hosts.secret_clear(host, name)
+                        cleared += 1
+                    except (hosts.HostError, OSError):
+                        pass    # one stubborn entry is not worth losing the rest
+
+            said = f"forgot {host}"
+            if cleared:
+                said += f" and {cleared} password" + ("s" if cleared > 1 else "")
+            said += f" -- old config kept at {backup.name}"
+            if unmount_error:
+                said += f"; still mounted: {unmount_error}"
+            GLib.idle_add(self.notice, said)
+
+        threading.Thread(target=tidy, name=f"forget-{host}",
+                         daemon=True).start()
 
     def prompt_add_host(self) -> None:
         def add(values):
@@ -2463,19 +2497,28 @@ class ConnApp(Gtk.Application):
         self.add_action(sample)
 
     def send_sample_notification(self) -> None:
-        """One notification about a real session, for looking at."""
-        row = hosts.probe(hosts.LOCAL)
-        sessions = row.get("sessions") or []
-        if not sessions:
-            return
-        # Prefer one actually waiting on you: that is the notification worth
-        # seeing, and the only kind that goes out at HIGH.
-        session = next((s for s in sessions
-                        if s["agent"]["state"] in (agent_state.NEEDS_YOU,
-                                                   agent_state.DRAFT)),
-                       sessions[0])
-        self.send_notification(f"conn-{hosts.LOCAL}-{session['name']}",
-                               notification(hosts.LOCAL, session))
+        """One notification about a real session, for looking at.
+
+        The probe runs on a worker: it is a subprocess with a 15s ceiling,
+        and this is called on the main loop by a D-Bus action.
+        """
+        def work():
+            row = hosts.probe(hosts.LOCAL)
+            sessions = row.get("sessions") or []
+            if not sessions:
+                return
+            # Prefer one actually waiting on you: that is the notification
+            # worth seeing, and the only kind that goes out at HIGH.
+            session = next((s for s in sessions
+                            if s["agent"]["state"] in (agent_state.NEEDS_YOU,
+                                                       agent_state.DRAFT)),
+                           sessions[0])
+            def send():
+                self.send_notification(f"conn-{hosts.LOCAL}-{session['name']}",
+                                       notification(hosts.LOCAL, session))
+                return GLib.SOURCE_REMOVE
+            GLib.idle_add(send)
+        threading.Thread(target=work, name="notify-test", daemon=True).start()
 
     def open_from_notification(self, _action, target):
         """Open the session a notification was about.
