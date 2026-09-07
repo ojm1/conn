@@ -448,7 +448,8 @@ class Conn(Gtk.ApplicationWindow):
 
         self.palette = load_palette()
         # The font the terminals beside this window are using, and how far off
-        # it you have zoomed. Both are read once; ctrl-+ changes the second.
+        # it you have zoomed. Palette and font are read once: a theme changed
+        # mid-run lands at the next start, not before. ctrl-+ moves the zoom.
         self.font = terminal_font()
         self.zoom = read_zoom()
         # What was on disk when this process started. Anything newer than it
@@ -601,9 +602,10 @@ class Conn(Gtk.ApplicationWindow):
         """What a mark means, spelled out.
 
         A single red ! is only obvious once someone has told you; until then
-        it is a punctuation mark on a list. The three that matter are the
-        three conditions the bar beside the name is showing: all clear,
-        yellow alert, red alert.
+        it is a punctuation mark on a list. The ones that matter are the
+        conditions the bar beside the name is showing: red alert, yellow
+        alert, all clear -- and grey while a host is dark or a screen
+        unrecognised, because not knowing is not all clear.
         """
         marks = [
             ("!", agent_state.NEEDS_YOU, "needs you",
@@ -616,7 +618,7 @@ class Conn(Gtk.ApplicationWindow):
              "all clear -- waiting at an empty prompt"),
             (".", agent_state.SHELL, "shell", "not an agent, just a shell"),
             ("?", agent_state.UNKNOWN, "unknown",
-             "not recognised -- never assume this one is idle"),
+             "greys the bar -- not recognised, never assume it is idle"),
         ]
         grid = Gtk.Grid(row_spacing=4, column_spacing=10, margin_top=12,
                         margin_bottom=12, margin_start=12, margin_end=12)
@@ -1619,8 +1621,9 @@ class Conn(Gtk.ApplicationWindow):
 
         top = Gtk.Box(spacing=10)
         # The mark is the fleet's condition rather than a logo: it takes the
-        # colour of the most urgent thing on the list -- green quiet, amber
-        # something working, red a session waiting on you. render() sets it.
+        # colour of the most urgent thing on the list -- grey while hosts are
+        # dark or screens unrecognised, green quiet, amber something working,
+        # red a session waiting on you. render() sets it.
         self.condition = Gtk.Label(label=CONDITION_BAR, xalign=0)
         self.condition.add_css_class("condition")
         self.condition.set_valign(Gtk.Align.CENTER)
@@ -1909,6 +1912,7 @@ class Conn(Gtk.ApplicationWindow):
         shape = []
         waiting = 0
         busy = 0
+        unknown = 0
         slots = []
         # Counted across every host, starred or not. An unstarred server is
         # quieter, not unwatched, and a count that ignored half the fleet
@@ -1920,6 +1924,8 @@ class Conn(Gtk.ApplicationWindow):
                     waiting += 1
                 elif session["agent"]["state"] == agent_state.WORKING:
                     busy += 1
+                elif session["agent"]["state"] == agent_state.UNKNOWN:
+                    unknown += 1
 
         rest = [h for h in self.order if h not in self.starred]
         for kind, host in self.listed():
@@ -1937,13 +1943,25 @@ class Conn(Gtk.ApplicationWindow):
         # states and the line had two, so "nothing waiting" sat under an amber
         # bar whenever something was working. True -- nothing was waiting on
         # you -- and unreadable as anything but a contradiction.
+        #
+        # And green is a claim, not a default: every host answering, every
+        # screen recognised. Before the first probe lands, while a host is
+        # dark, or while a session defies classification, the honest colour
+        # is grey -- a fleet out of sight was being drawn in the same green
+        # as a fleet with nothing to do, reassuring exactly when nothing was
+        # known.
+        live = sum(1 for host in self.order if self.rows[host]["state"] == "up")
+        dark = len(self.order) - live
         self.alert = (agent_state.NEEDS_YOU if waiting
                       else agent_state.WORKING if busy
+                      else agent_state.UNKNOWN if unknown or dark
                       else agent_state.READY)
         self.subtitle.set_text(
             f"{waiting} waiting on you" if waiting
             else f"{busy} working" if busy
-            else "all clear")
+            else f"{unknown} unknown" if unknown
+            else (f"{dark} host{'s' if dark != 1 else ''} dark" if dark
+                  else "all clear"))
         for name, on in (("waiting", self.alert == agent_state.NEEDS_YOU),
                          ("busy", self.alert == agent_state.WORKING)):
             if on:
@@ -1952,7 +1970,6 @@ class Conn(Gtk.ApplicationWindow):
                 self.subtitle.remove_css_class(name)
         self.condition.set_attributes(
             self._colour_attrs(mark_colour(self.palette, self.alert)))
-        live = sum(1 for host in self.order if self.rows[host]["state"] == "up")
         said, until = self.said
         if time.monotonic() < until:
             self.footnote.set_text(said)     # a message that has not had its

@@ -138,7 +138,9 @@ the one attach that cannot go anywhere.
 
 The bar beside the name is the condition of the whole fleet, and it is the one thing worth reading
 from across the room: green is all clear, amber is something working, red is a session waiting on
-you. It is the same three states the marks carry, added up.
+you -- and grey is not knowing: a host dark, or a screen that cannot be read. A fleet out of sight
+is not a fleet with nothing to do, so green is a claim the panel only makes once every host has
+answered and every screen is recognised. It is the marks' own states, added up.
 
 There is deliberately no ship's wheel. U+2388 is named HELM SYMBOL and reads as Kubernetes to
 precisely the people who would run this.
@@ -268,7 +270,9 @@ terminal sitting beside the real one -- the terminal is hosting a process that n
 anything in it.
 
 Colours follow the [Omarchy](https://omarchy.org) desktop theme when present, and fall back to a
-built-in palette otherwise. `CONN_THEME=light|dark` forces it.
+built-in palette otherwise. `CONN_THEME=light|dark` forces it. Read once, at startup: a theme
+changed while conn is running shows up on the next start -- the sessions are tmux, so restarting
+costs nothing but the views.
 
 ## The font is the one you already chose
 

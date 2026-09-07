@@ -13,6 +13,10 @@ the choice either way.
 The terminal font is read the same way -- out of the config of the terminal
 this machine actually has -- so a session inside conn is the size the rest of
 your terminals are. CONN_FONT overrides it.
+
+Everything here is read once, at startup: conn does not notice a theme or
+font changed mid-run. Restarting picks the change up, and the sessions are
+tmux, so a restart costs nothing but the views.
 """
 
 from __future__ import annotations
@@ -129,40 +133,6 @@ class Palette:
     @property
     def magenta(self) -> str:
         return self.pick("magenta", "bright_magenta", "brown", default=self.foreground)
-
-    # -- semantic styles used by the views --------------------------------
-
-    def priority(self, priority: int) -> str:
-        """p1 shouts, p2 and p3 tint, p4 stays quiet."""
-        return {4: f"bold {self.red}",
-                3: self.orange,
-                2: self.blue}.get(priority, self.muted)
-
-    def due(self, state: str) -> str:
-        return {"overdue": f"bold {self.red}",
-                "today": f"bold {self.green}",
-                "tomorrow": self.yellow,
-                "week": self.foreground,
-                "later": self.muted}.get(state, self.muted)
-
-    def event(self, kind: str) -> str:
-        return {"completed": f"bold {self.green}",
-                "uncompleted": f"bold {self.yellow}",
-                "added": self.blue,
-                "updated": self.muted,
-                "deleted": f"bold {self.red}",
-                "moved": self.magenta}.get(kind, self.foreground)
-
-    @property
-    def heading(self) -> str:
-        return f"bold underline {self.accent}"
-
-    def signature(self) -> tuple:
-        """Everything the UI actually paints with. Compared on refresh, so
-        swapping between two themes of the same mode is still noticed."""
-        return (self.mode, self.background, self.foreground, self.surface,
-                self.panel, self.muted, self.accent, self.red, self.orange,
-                self.yellow, self.green, self.blue, self.magenta)
 
 
 def _read_omarchy() -> dict | None:
