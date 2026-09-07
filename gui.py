@@ -462,6 +462,10 @@ class Conn(Gtk.ApplicationWindow):
         # When each host was last probed, so the unstarred can be swept on a
         # long timer without a second GLib source to keep in step.
         self.probed: dict[str, float] = {}
+        # When a stream frame last landed for each host. A probe's captures
+        # are taken at connect and arrive seconds later; this is how a probe
+        # that was overtaken by the stream knows not to shout it down.
+        self.streamed: dict[str, float] = {}
         # A session opened before the sidebar knows it exists -- a brand new
         # one -- has no row to highlight yet. The key waits here until the
         # probe brings the row in. See select_key().
@@ -988,7 +992,10 @@ class Conn(Gtk.ApplicationWindow):
         session = self.open.get((host, name))
         if session is not None:
             GLib.idle_add(self.close_session, session)
-        GLib.idle_add(self.sweep)
+        # A probe of this host now, not the sweep: on the slow timer the dead
+        # session's row would linger for minutes, and activating it would
+        # quietly re-create the session -- attach is new-session -A.
+        GLib.idle_add(self.recheck, host)
 
     def complain(self, what: str, message: str) -> bool:
         dialog = Gtk.AlertDialog()
@@ -1047,7 +1054,11 @@ class Conn(Gtk.ApplicationWindow):
         # which is right: a rename is not a chat that started needing you.
         self.was.pop((host, was), None)
         self.drafts.pop((host, was), None)
-        self.sweep()
+        # A probe of this host now, not the sweep: an unstarred host on the
+        # slow timer would keep the old name on show for up to five minutes,
+        # and its stale row silently re-creates the session if activated --
+        # attach is new-session -A.
+        self.recheck(host)
         return GLib.SOURCE_REMOVE
 
     def toggle_star(self, host: str) -> None:
@@ -1150,6 +1161,7 @@ class Conn(Gtk.ApplicationWindow):
         self.rows.pop(host, None)
         self.inflight.discard(host)
         self.probed.pop(host, None)
+        self.streamed.pop(host, None)
         if host in self.starred:
             self.starred.discard(host)
             save_stars(self.starred)
@@ -1509,7 +1521,7 @@ class Conn(Gtk.ApplicationWindow):
             ("network-server-symbolic", "Add a server to ~/.ssh/config",
              lambda: self.prompt_add_host()),
             ("view-refresh-symbolic", "Refresh every host now",
-             lambda: self.load_hosts()),
+             lambda: self.load_hosts(force=True)),
         ):
             button = Gtk.Button(icon_name=icon)
             button.add_css_class("action")
@@ -1700,7 +1712,7 @@ class Conn(Gtk.ApplicationWindow):
 
     # -- the list ----------------------------------------------------------
 
-    def load_hosts(self, connect: bool = True) -> None:
+    def load_hosts(self, connect: bool = True, force: bool = False) -> None:
         self.order = hosts.list_hosts()
         for host in self.order:
             self.rows.setdefault(host, hosts.blank(host))
@@ -1719,9 +1731,9 @@ class Conn(Gtk.ApplicationWindow):
 
         self.render()
         if connect:
-            self.connect_hosts()
+            self.connect_hosts(force)
 
-    def connect_hosts(self) -> None:
+    def connect_hosts(self, force: bool = False) -> None:
         """Open the ssh: a watch stream per host, and a probe of each.
 
         That is two connections a host going off at the same instant, and on
@@ -1740,7 +1752,7 @@ class Conn(Gtk.ApplicationWindow):
         for host in self.order:
             if host in self.starred:    # the rest are polled, never streamed
                 self.start_stream(host)
-        self.sweep()
+        self.sweep(force)
 
     def listed(self) -> list[tuple[str, str]]:
         """The sidebar, top to bottom.
@@ -2205,6 +2217,11 @@ class Conn(Gtk.ApplicationWindow):
         of seconds, which is the deal you make by not starring it.
         """
         self.check_source()
+        # The agent gate. Probing before there is a key to ride would flip
+        # every host to red "no key" -- the exact fan-out connect_hosts()
+        # is holding back. See show_agent().
+        if self.holding:
+            return
         now = time.monotonic()
         for host in self.order:
             if host in self.inflight:
@@ -2218,12 +2235,27 @@ class Conn(Gtk.ApplicationWindow):
                              name=f"probe-{host}", daemon=True).start()
 
     def _probe(self, host: str) -> None:
+        started = time.monotonic()
         row = hosts.probe(host)
-        GLib.idle_add(self._probed, host, row)
+        GLib.idle_add(self._probed, host, row, started)
 
-    def _probed(self, host: str, row: dict) -> bool:
+    def _probed(self, host: str, row: dict, started: float) -> bool:
         self.inflight.discard(host)
         if host in self.rows:
+            if self.streamed.get(host, 0.0) > started:
+                # The stream spoke while this probe was in flight, so the
+                # probe's captures -- taken back at connect time -- are the
+                # older ones. The stream stays silent while a screen is
+                # unchanged, so letting the probe win would show the stale
+                # state until the next sweep -- and announce() would then
+                # re-notify the change as if it were new.
+                fresher = {s["name"]: s
+                           for s in self.rows[host].get("sessions", [])}
+                for session in row.get("sessions", []):
+                    kept = fresher.get(session["name"])
+                    if kept is not None:
+                        session["screen"] = kept.get("screen", "")
+                        session["agent"] = kept["agent"]
             self.rows[host] = row
             self.render()
         return GLib.SOURCE_REMOVE
@@ -2362,6 +2394,7 @@ class Conn(Gtk.ApplicationWindow):
                 session["screen"] = data["screen"]
                 session["agent"] = agent_state.classify(
                     data["screen"], data["commands"], data.get("raw", ""))
+                self.streamed[host] = time.monotonic()
                 dirty = True
         if dirty:
             self.render()
