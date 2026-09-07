@@ -86,6 +86,19 @@ def main(argv: list[str]) -> int:
                 return 1
             return send_test_notification()
 
+        if arg == "--gapplication-service":
+            # Not a user flag: the bus daemon passes it when it starts conn
+            # to answer an activation (org.omarchy.conn.service). It has to
+            # get past this parser to GApplication, which owns it -- register
+            # on the bus, run the action that caused the start, and only open
+            # a window if that action asks for one.
+            try:
+                from gui import run
+            except (ImportError, ValueError) as exc:
+                print(f"needs GTK4: {exc}", file=sys.stderr)
+                return 1
+            return run(service=True)
+
         print(f"unknown option: {arg}\n\n{USAGE}", file=sys.stderr)
         return 2
 

@@ -187,7 +187,8 @@ column is blank rather than promising a key that does not exist.
 The panel is honest about who is waiting on you, but only to someone looking at it -- and the thing
 worth knowing is exactly that a chat has been sitting there while you did something else. So it
 says so: a desktop notification, once, and not again until the session has been something else in
-between. Clicking it opens that session.
+between. Clicking it opens that session -- starting conn first if it has exited in the meantime,
+which is what the D-Bus service file in the install section is for.
 
 **Needs you** is announced the moment it happens -- nothing moves in that chat until you answer.
 **An unsent draft is not**, because typing is a draft too: the box holds text from the first
@@ -282,6 +283,17 @@ The icon is named for the app id, so the window picks it up for the taskbar too.
 window now, so starting it through a TUI wrapper (`omarchy-launch-tui conn`, or a terminal binding) leaves an empty
 terminal sitting beside the real one -- the terminal is hosting a process that no longer draws
 anything in it.
+
+And the D-Bus service file, which is what lets the session bus *start* conn: a notification
+clicked after conn has exited, and `conn --notify` with no conn running, both land on the bus name
+-- `DBusActivatable=true` in the desktop entry only names it. The `Exec` line has to be an
+absolute path, because the bus does no PATH lookup, hence the sed:
+
+```bash
+mkdir -p ~/.local/share/dbus-1/services
+sed "s|/home/you|$HOME|" org.omarchy.conn.service \
+  > ~/.local/share/dbus-1/services/org.omarchy.conn.service
+```
 
 Colours follow the [Omarchy](https://omarchy.org) desktop theme when present, and fall back to a
 built-in palette otherwise. `CONN_THEME=light|dark` forces it. Read once, at startup: a theme

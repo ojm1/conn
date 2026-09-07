@@ -2728,8 +2728,17 @@ class ConnApp(Gtk.Application):
         window.present()
 
 
-def run() -> int:
-    return ConnApp().run(None)
+def run(service: bool = False) -> int:
+    """service is a D-Bus activation start (org.omarchy.conn.service).
+
+    The flag is GApplication's own, so it is handed back as an argument
+    rather than translated into ApplicationFlags here: parsing it puts the
+    app in service mode -- register, wait for the activation that caused
+    the start, exit quietly if none arrives -- which is what keeps `conn
+    --notify` from flashing a window open just to send a notification.
+    """
+    argv = [sys.argv[0], "--gapplication-service"] if service else None
+    return ConnApp().run(argv)
 
 
 def send_test_notification() -> int:
@@ -2743,8 +2752,9 @@ def send_test_notification() -> int:
     what it looked like.
 
     So this activates an action on the app instead. org.freedesktop.Application
-    is what DBusActivatable=true in the desktop entry provides, which means it
-    starts conn if conn is not already running.
+    is the interface DBusActivatable=true advertises, and the installed
+    org.omarchy.conn.service file is what lets the bus start conn to answer
+    this call when conn is not already running.
     """
     try:
         bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)

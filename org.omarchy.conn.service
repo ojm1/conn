@@ -1,0 +1,8 @@
+# What lets the session bus *start* conn. A notification click after conn
+# has exited and `conn --notify` with no conn running both land on the bus
+# name org.omarchy.conn; DBusActivatable=true in the desktop entry only
+# names it. Exec must be an absolute path -- the bus does no PATH lookup --
+# so the README's install step seds /home/you into the real home.
+[D-BUS Service]
+Name=org.omarchy.conn
+Exec=/home/you/.local/bin/conn --gapplication-service
