@@ -18,6 +18,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
+import traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -82,21 +84,38 @@ def main() -> int:
         tmux("new-session", "-d", "-s", name, "bash --norc")
 
     # The window builds on activate, but its first probe lands on a worker,
-    # so the checks wait for that to come back before asking what is listed.
+    # so the checks wait for its rows to arrive rather than guessing how long
+    # that takes. The deadline turns a probe that never returns into failures
+    # over the listing that actually arrived, not a hang.
     class Panel(Gtk.Application):
         def do_activate(self):
             window = gui.Conn(self)
+            wanted = {("local", name) for name in SESSIONS}
+            deadline = time.monotonic() + 30.0
 
-            def later():
+            def settled():
+                if not (wanted <= set(window.slots)
+                        or time.monotonic() >= deadline):
+                    return True
                 try:
                     run(window, check, gui, hosts, agent_state, Gtk)
+                except Exception:
+                    # A crash is a verdict too. PyGObject swallows one thrown
+                    # out of a callback, so left uncounted it skipped every
+                    # check after it and still printed "all good".
+                    check("the checks themselves ran to completion", False,
+                          traceback.format_exc())
                 finally:
-                    for session in list(window.open.values()):
-                        window.close_session(session)
+                    try:
+                        for session in list(window.open.values()):
+                            window.close_session(session)
+                    except Exception:
+                        check("and cleaned up after themselves", False,
+                              traceback.format_exc())
                     self.quit()
                 return False
 
-            GLib.timeout_add_seconds(5, later)
+            GLib.timeout_add(200, settled)
 
     Panel(application_id="org.omarchy.conn.test").run(None)
 
