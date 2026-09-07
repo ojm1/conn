@@ -211,29 +211,28 @@ class ClaudeCode(Agent):
         """This has to be exact. Submitted messages stay on screen in the
         transcript behind the very same "❯" that marks the input line, so
         matching "❯" anywhere reports every finished chat as having unsent
-        text. What actually identifies the box is its fencing: it is the region
-        between the last two plain horizontal rules. Box-drawing corners like
-        "╰───" are deliberately not rules, which is what keeps the welcome
-        banner from matching.
+        text. What actually identifies the box is its fencing: it is the
+        region between the last two horizontal rules, however far apart --
+        the box grows with what you type into it. A wide box-drawing border
+        like "╭────╮" counts as a rule too, and that is fine: the input box
+        sits below any banner drawn that way, so the last two rules are
+        still its own.
         """
         lines = screen.splitlines()
         rules = [index for index, line in enumerate(lines) if self._is_rule(line)]
-        if not rules:
+        if len(rules) < 2:
+            # The capture arrives through tail, so a trim cuts the *top* of
+            # the screen: a lone rule is the box's closing fence with the
+            # opening one lost, and below it there is only footer. Nothing
+            # left to read the box from.
             return None
 
-        if len(rules) >= 2 and rules[-1] - rules[-2] <= 4:
-            segment = lines[rules[-2] + 1:rules[-1]]
-        else:
-            # The capture can end mid-box when the screen was trimmed, leaving
-            # the opening rule as the last one seen.
-            segment = lines[rules[-1] + 1:]
+        segment = lines[rules[-2] + 1:rules[-1]]
 
         # Whatever the box holds, if it was drawn dim then Claude suggested
         # it and you did not leave it there. An empty box is idle.
         if ghosts:
-            first = (rules[-2] + 1
-                     if len(rules) >= 2 and rules[-1] - rules[-2] <= 4
-                     else rules[-1] + 1)
+            first = rules[-2] + 1
             segment = [line for offset, line in enumerate(segment)
                        if first + offset not in ghosts]
 
@@ -260,7 +259,11 @@ class ClaudeCode(Agent):
         return last_match(self.LAST_ACTION, screen)
 
     def background(self, screen: str) -> str:
-        agents = self.AGENTS.search(screen)
+        # Last match, as everywhere: a finished run's "8/8 agents done" can
+        # sit in the transcript above the fleet that is still going.
+        agents = None
+        for match in self.AGENTS.finditer(screen):
+            agents = match
         if agents:
             done, total = int(agents.group(1)), int(agents.group(2))
             if done < total:
@@ -269,7 +272,9 @@ class ClaudeCode(Agent):
                 suffix = f" - {elapsed.group(1)}" if elapsed else ""
                 return f"{done}/{total} agents{suffix}"
 
-        workflow = self.WORKFLOW.search(screen)
+        workflow = None
+        for match in self.WORKFLOW.finditer(screen):
+            workflow = match
         if workflow:
             count = workflow.group(1)
             return f"{count} workflow{'s' if count != '1' else ''} running"
@@ -370,8 +375,6 @@ class OpenCode(Agent):
 
 
 AGENTS: tuple[Agent, ...] = (ClaudeCode(), OpenCode())
-
-SHELLS = {"bash", "zsh", "sh", "fish", "-bash", "tmux"}
 
 
 def detect(commands: list[str]) -> Agent | None:

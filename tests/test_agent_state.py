@@ -78,6 +78,18 @@ CLAUDE = {
                            "‘Do you want to run rm -rf build?’ earlier today.\n"
                            f"{RULE}\n❯ Try \"fix the bug\"\n{RULE}\n"
                            f"  ⏵⏵ auto mode on"),
+    # The box grows with what you type, so its rules drift apart. Reading
+    # the footer strip instead reported every tall draft as idle.
+    "tall draft": (f"{RULE}\n❯ please refactor the loader\nand the tests\n"
+                   f"and the docs\nand the readme\nand the changelog\n{RULE}\n"
+                   f"  ⏵⏵ auto mode on"),
+    # The capture is a tail, so a trim cuts the top of the screen: only the
+    # box's closing rule survives, and the box itself is gone.
+    "trimmed box": f"❯ half a draft\n{RULE}\n  ⏵⏵ auto mode on",
+    # A finished fleet in the transcript above one still running.
+    "finished fleet above": (f"8/8 agents done · 5m 0s ·\n  fleet summary\n"
+                             f"{RULE}\n❯ \n{RULE}\n  1/8 agents done · 12s ·"),
+    "workflow": f"{RULE}\n❯ \n{RULE}\n  Waiting for 2 workflows",
 }
 
 CASES = [
@@ -102,6 +114,16 @@ CASES = [
      ["claude"], A.NEEDS_YOU),
     ("claude list in prose",  CLAUDE["list in prose"], ["claude"], A.READY),
     ("claude curly quotes",   CLAUDE["curly quoted prose"], ["claude"], A.READY),
+    ("claude tall draft",     CLAUDE["tall draft"],  ["claude"], A.DRAFT),
+    ("claude trimmed box",    CLAUDE["trimmed box"], ["claude"], A.UNKNOWN),
+    ("claude fleet still going", CLAUDE["finished fleet above"],
+     ["claude"], A.WORKING),
+    ("claude workflow",       CLAUDE["workflow"],   ["claude"], A.WORKING),
+
+    # No pane list at all: the agent is guessed from its own chrome.
+    ("claude guessed from chrome",   CLAUDE["busy"],      [], A.WORKING),
+    ("opencode guessed from chrome", "opencode_idle.txt", [], A.READY),
+    ("no panes, no chrome",          "just some text",    [], A.UNKNOWN),
 
     # Not an agent at all.
     ("plain shell",          "opencode_idle.txt",  ["bash"],   A.SHELL),
@@ -180,6 +202,12 @@ def main() -> int:
         ("even when the answered one outranks it",
          "teardown.sh" in A.classify(CLAUDE["prompt after prompt"],
                                      ["claude"])["detail"]),
+        ("the fleet line that counts is the one still running",
+         A.classify(CLAUDE["finished fleet above"], ["claude"])["detail"]
+         == "1/8 agents - 12s"),
+        ("a workflow is background work",
+         A.classify(CLAUDE["workflow"], ["claude"])["detail"]
+         == "2 workflows running"),
         ("draft and blocked both call for a human",
          A.needs_attention(A.DRAFT) and A.needs_attention(A.NEEDS_YOU)),
         ("working and idle do not",
