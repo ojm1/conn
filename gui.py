@@ -2174,8 +2174,16 @@ class Conn(Gtk.ApplicationWindow):
 
         The tmux session on the other side is untouched -- that is the whole
         point of it -- so this is closing a view, not ending any work.
+
+        One death reports twice: a kill closes the view AND makes the child
+        exit, so _exited arrives on a session already closed -- and removing
+        it from the stack again is a Gtk-CRITICAL that ends with the visible
+        view yanked somewhere unrelated. Identity, not just the key: by the
+        time a late signal lands, the key can name a newly opened view.
         """
-        self.open.pop((session.host, session.name), None)
+        if self.open.get((session.host, session.name)) is not session:
+            return
+        self.open.pop((session.host, session.name))
         self.stack.remove(session)
         self.repaint()
         if self.open:
