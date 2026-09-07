@@ -871,6 +871,19 @@ class Conn(Gtk.ApplicationWindow):
                         margin_top=14, margin_bottom=14,
                         margin_start=14, margin_end=14)
 
+        # The host in the body, not just the title -- nothing in conn trains
+        # you to read a title, and a password filed against the wrong server
+        # is the mistake this window exists to prevent. Two labels, like
+        # ask(): a host named with an ampersand is a name, not broken Pango.
+        top = Gtk.Box(spacing=6)
+        lead = Gtk.Label(label="Kept for", xalign=0)
+        lead.add_css_class("detail")
+        top.append(lead)
+        subject = Gtk.Label(label=host, xalign=0)
+        subject.add_css_class("heading")
+        top.append(subject)
+        outer.append(top)
+
         listing = Gtk.ListBox()
         listing.set_selection_mode(Gtk.SelectionMode.NONE)
         scroller = Gtk.ScrolledWindow()
@@ -982,7 +995,7 @@ class Conn(Gtk.ApplicationWindow):
                     return
                 refill()
             self.ask(f"Keep for {host}", [("Name", ""), ("Value", "")], store,
-                     secret="Value")
+                     secret="Value", lead="Keep for", heading=host)
 
         buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
         new = Gtk.Button(label="Add...")
@@ -1070,11 +1083,17 @@ class Conn(Gtk.ApplicationWindow):
 
     def prompt_rename(self, host: str, name: str) -> None:
         """Sessions get named once, when they are made, and "shell" is what
-        three of them end up called. Renaming one costs a tmux command."""
+        three of them end up called. Renaming one costs a tmux command.
+
+        Which one is in the body, like prompt_new_session: the target was
+        only ever in the window title, and nothing in conn trains you to
+        read one -- with three sessions called shell, that made this dialog
+        a coin toss."""
         self.ask(f"Rename {host}/{name}", [("Name", name)],
                  lambda values: threading.Thread(
                      target=self._rename, args=(host, name, values["Name"]),
-                     daemon=True).start())
+                     daemon=True).start(),
+                 lead="Rename", heading=f"{host}/{name}")
 
     def _rename(self, host: str, name: str, wanted: str) -> None:
         try:
@@ -1377,7 +1396,8 @@ class Conn(Gtk.ApplicationWindow):
                 self.close()
                 return True
             # What every terminal binds. "equal" is the unshifted key the +
-            # is printed on, so ctrl-+ works without asking for shift too.
+            # is printed on, so ctrl-= zooms too; the literal ctrl-+ arrives
+            # with shift down and is matched in the shifted block below.
             if name in ("plus", "equal", "kp_add"):
                 return self.zoom_by(ZOOM_STEP)
             if name in ("minus", "kp_subtract"):
@@ -1400,6 +1420,10 @@ class Conn(Gtk.ApplicationWindow):
                 return self.rename_selected()
             if name == "s":
                 return self.copy_screen()
+            # The + on most layouts is shift-=, so the ctrl-+ the guide
+            # promises lands here, shift and all.
+            if name in ("plus", "equal", "kp_add"):
+                return self.zoom_by(ZOOM_STEP)
 
         return False        # everything else belongs to the terminal
 
@@ -1489,6 +1513,17 @@ class Conn(Gtk.ApplicationWindow):
         """
         self.said = (text, time.monotonic() + 4.0)
         self.footnote.set_text(text)
+        # Its own timer, because the next render can be minutes out: the
+        # streams speak only when a screen changes, and with nothing starred
+        # the next probe is on the slow timer. Stamped with the tuple above,
+        # so expiring a notice that has since been replaced is a no-op.
+        GLib.timeout_add_seconds(4, self.expire_notice, self.said)
+
+    def expire_notice(self, said: tuple[str, float]) -> bool:
+        if self.said == said:
+            self.said = ("", 0.0)
+            self.render()
+        return GLib.SOURCE_REMOVE
 
     def kill_selected(self) -> bool:
         """Kill whatever the list is pointing at. Not bound to Delete: this
@@ -2101,6 +2136,10 @@ class Conn(Gtk.ApplicationWindow):
         box = Gtk.Box(spacing=8)
         label = Gtk.Label(label=host, xalign=0)
         label.add_css_class("host")
+        # Ellipsized, or the widest name decides how wide the sidebar is:
+        # the list never scrolls sideways, so an unellipsizable label's
+        # minimum width propagates up and past the fixed SIDEBAR_WIDTH.
+        label.set_ellipsize(Pango.EllipsizeMode.END)
         box.append(label)
 
         note = {"down": "down", "nokey": "no key"}.get(data["state"], "")
@@ -2172,6 +2211,7 @@ class Conn(Gtk.ApplicationWindow):
 
         name = Gtk.Label(label=session["name"], xalign=0)
         name.add_css_class("name")
+        name.set_ellipsize(Pango.EllipsizeMode.END)  # like the host label
         box.append(name)
 
         tail = Gtk.Label(label=self._detail(session), xalign=1)
