@@ -463,9 +463,12 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     window.check_source()
     check("no restart nag while this is the installed version",
           not window.updated.get_visible())
-    window.stamp -= 10                     # as if a newer copy had landed
+    # As if an install had landed with cp -p: the mtimes it brings are the
+    # source's own, so nothing on disk is newer -- but a file's size changed.
+    path, (size, mtime) = next(iter(window.stamp.items()))
+    window.stamp = {**window.stamp, path: (size + 1, mtime)}
     window.check_source()
-    check("and one as soon as a newer one is copied over it",
+    check("and one as soon as a different one is copied over it",
           window.updated.get_visible(),
           "three times running, a feature was missing only because the "
           "window was still the build from yesterday")

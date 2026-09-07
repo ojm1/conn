@@ -219,7 +219,7 @@ text, it is the same capture the state is read from.
 
 `cp *.py ~/.local/share/conn/app/` does not touch the window already running: it goes on running
 the code it started with, and a feature added an hour ago is simply not there. So the footer says
-**restart to update** once the files on disk are newer than the ones in memory, and clicking it
+**restart to update** once the files on disk differ from the ones in memory, and clicking it
 replaces the process with the installed one. The sessions are tmux and outlive it -- the views
 close and come straight back.
 

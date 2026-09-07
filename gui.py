@@ -202,12 +202,22 @@ def rgba(colour: str) -> Gdk.RGBA:
     return value
 
 
-def source_stamp() -> float:
-    """The newest mtime among the files this app is made of."""
-    try:
-        return max(path.stat().st_mtime for path in APP_DIR.glob("*.py"))
-    except (OSError, ValueError):
-        return 0.0
+def source_stamp() -> dict[str, tuple[int, float]]:
+    """{path: (size, mtime)} for every file this app is made of.
+
+    A map rather than the newest mtime: `cp -p` and `rsync -a` install with
+    the source's timestamps, so a real update can arrive with nothing newer
+    than what was already here -- but it cannot leave this map alone. rglob,
+    so files under a future package subdirectory count too.
+    """
+    stamp = {}
+    for path in APP_DIR.rglob("*.py"):
+        try:
+            info = path.stat()
+        except OSError:
+            continue        # deleted mid-scan: absent, which is a difference
+        stamp[str(path)] = (info.st_size, info.st_mtime)
+    return stamp
 
 
 def read_stars() -> set[str] | None:
@@ -490,7 +500,7 @@ class Conn(Gtk.ApplicationWindow):
         # mid-run lands at the next start, not before. ctrl-+ moves the zoom.
         self.font = terminal_font()
         self.zoom = read_zoom()
-        # What was on disk when this process started. Anything newer than it
+        # What was on disk when this process started. Any difference from it
         # is a version nobody is running yet.
         self.stamp = source_stamp()
         # A footer message and when it stops being worth showing.
@@ -2430,7 +2440,7 @@ class Conn(Gtk.ApplicationWindow):
         os.execv(sys.executable, [sys.executable, str(APP_DIR / "main.py")])
 
     def check_source(self) -> None:
-        self.updated.set_visible(source_stamp() > self.stamp)
+        self.updated.set_visible(source_stamp() != self.stamp)
 
     def sweep(self, force: bool = False) -> None:
         """Probe the starred every time; the rest on a long timer.
