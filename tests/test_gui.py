@@ -97,6 +97,7 @@ def main() -> int:
     import hosts
 
     gui.STARS_STATE = state / "starred"
+    gui.ORDER_STATE = state / "order"
     gui.ZOOM_STATE = state / "zoom"
     hosts.MNT_ROOT = state / "mnt"
 
@@ -714,6 +715,60 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
                   and row_for(window, beta) is not None)
         finally:
             gui.STARS_STATE = was
+            window.load_hosts(connect=False)
+
+    # -- reordering the servers --------------------------------------------
+    # arrange() and move_within_tier() are pure, so check the awkward cases
+    # directly, then drive one move through the window against a config, order
+    # file and stars of this run's own.
+    check("arrange leads with the saved order, the rest behind in config order",
+          gui.arrange(["local", "a", "b", "c"], ["c", "a"])
+          == ["c", "a", "local", "b"])
+    check("arrange drops a saved name whose host is gone",
+          gui.arrange(["local", "a"], ["x", "a"]) == ["a", "local"])
+    check("arrange tolerates a duplicate in a hand-edited order file",
+          gui.arrange(["local", "a", "b"], ["b", "b", "a"])
+          == ["b", "a", "local"])
+    check("a move swaps with the neighbour in the same tier",
+          gui.move_within_tier(["a", "b", "c"], {"a", "b", "c"}, "b", -1)
+          == ["b", "a", "c"])
+    check("and never crosses the fold into the unstarred",
+          gui.move_within_tier(["a", "b", "c"], {"a", "b"}, "b", 1) is None,
+          "b is last among the starred; c is unstarred and folded away")
+    check("the top of a tier has nowhere to move up to",
+          gui.move_within_tier(["a", "b"], {"a", "b"}, "a", -1) is None)
+
+    with _tempfile.TemporaryDirectory() as tmp:
+        conf = Path(tmp) / "config"
+        conf.write_text("Host alpha\n    HostName a\n\n"
+                        "Host bravo\n    HostName b\n\n"
+                        "Host charlie\n    HostName c\n")
+        saved = (hosts.SSH_CONFIG, gui.ORDER_STATE, gui.STARS_STATE)
+        hosts.SSH_CONFIG = conf
+        gui.ORDER_STATE = Path(tmp) / "order"
+        gui.STARS_STATE = Path(tmp) / "stars"
+        try:
+            window.load_hosts(connect=False)    # first run stars all four
+            check("the list starts in config order",
+                  window.order == ["local", "alpha", "bravo", "charlie"],
+                  f"order={window.order}")
+            window.move_host("charlie", -1)
+            check("moving a server up swaps it with the one above",
+                  window.order == ["local", "alpha", "charlie", "bravo"],
+                  f"order={window.order}")
+            check("and the arrangement is written down",
+                  gui.ORDER_STATE.exists()
+                  and gui.read_order() == ["local", "alpha", "charlie", "bravo"],
+                  f"saved={gui.read_order()}")
+            window.load_hosts(connect=False)
+            check("which a fresh read of the config preserves",
+                  window.order == ["local", "alpha", "charlie", "bravo"],
+                  f"order={window.order}")
+            window.move_host("local", -1)
+            check("and the top server has nowhere further up to go",
+                  window.order[0] == "local", f"order={window.order}")
+        finally:
+            hosts.SSH_CONFIG, gui.ORDER_STATE, gui.STARS_STATE = saved
             window.load_hosts(connect=False)
 
     # -- mountpoints that outlived their mount -----------------------------

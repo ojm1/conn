@@ -104,6 +104,13 @@ ZOOM_STATE = Path.home() / ".local" / "state" / "conn" / "zoom"
 # every git remote using that alias for the sake of a tidier sidebar.
 STARS_STATE = Path.home() / ".local" / "state" / "conn" / "starred"
 
+# The order you last arranged the servers in, by hand. Beside the config for
+# the same reason the stars are: order has no representation in ssh config
+# either, and rewriting Host blocks to fake one is how a comment or a shared
+# alias gets eaten. Advisory -- a host it does not name still shows, after the
+# ones it does, and a name for a host that is gone is ignored.
+ORDER_STATE = Path.home() / ".local" / "state" / "conn" / "order"
+
 # A starred host is live: a watch stream and the 45s sweep. The rest are
 # probed on a long timer and never streamed, which is what stops a list of
 # forty servers being eighty ssh connections. They still report a session
@@ -243,6 +250,64 @@ def save_stars(names) -> None:
         STARS_STATE.write_text("\n".join(sorted(names)) + "\n")
     except OSError:
         pass        # a star that does not persist is not worth an error
+
+
+def read_order() -> list[str]:
+    """The hosts in the order you last arranged them, or [] if never set."""
+    try:
+        return ORDER_STATE.read_text().split()
+    except OSError:
+        return []
+
+
+def save_order(names) -> None:
+    # Not sorted, unlike the stars: here the order is the whole point.
+    try:
+        ORDER_STATE.parent.mkdir(parents=True, exist_ok=True)
+        ORDER_STATE.write_text("\n".join(names) + "\n")
+    except OSError:
+        pass        # an order that does not persist is not worth an error
+
+
+def arrange(config_order: list[str], saved: list[str]) -> list[str]:
+    """The config's hosts, reordered by a saved hand-arrangement.
+
+    Hosts the arrangement names lead, in its order; the rest keep their config
+    order behind them. A saved name for a host that is gone is dropped, and a
+    host the arrangement never saw is not lost -- it simply arrives at the end,
+    which is where a newly-added server belongs until you place it.
+    """
+    known = set(config_order)
+    front: list[str] = []
+    for h in saved:                         # a hand-edited file may repeat a
+        if h in known and h not in front:   # name; the config order never does
+            front.append(h)
+    placed = set(front)
+    return front + [h for h in config_order if h not in placed]
+
+
+def move_within_tier(order: list[str], starred, host: str,
+                     delta: int) -> list[str] | None:
+    """order with host swapped one place, among hosts of its own tier.
+
+    Up and down move within the starred group or within the rest, never across
+    the fold between them: a move that reordered a row folded out of sight, or
+    bumped a starred host down into hiding, is a move whose result you could
+    not read. None means there is no neighbour that way -- it is already at the
+    top or bottom of its group.
+    """
+    if host not in order:
+        return None         # nothing in the list to move
+    tier = host in starred
+    peers = [h for h in order if (h in starred) == tier]
+    here = peers.index(host)
+    there = here + delta
+    if not 0 <= there < len(peers):
+        return None
+    a, b = order.index(peers[here]), order.index(peers[there])
+    moved = order[:]
+    moved[a], moved[b] = moved[b], moved[a]
+    return moved
 
 
 def read_zoom() -> float:
@@ -706,6 +771,7 @@ class Conn(Gtk.ApplicationWindow):
             ("ctrl-shift-w", "close the view, leave the session running"),
             ("ctrl-shift-k", "kill the selected session, for good"),
             ("ctrl-shift-r", "rename it -- nothing in it is interrupted"),
+            ("ctrl-shift-up / down", "move the selected server up or down"),
             ("ctrl-f", "filter the list, esc clears it"),
             ("ctrl-+ - 0", "text bigger, smaller, back to your terminal's size"),
             ("F11 / ctrl-q", "fullscreen / quit"),
@@ -714,7 +780,7 @@ class Conn(Gtk.ApplicationWindow):
             ("ctrl-click", "open a link in a session"),
             ("right-click a session", "open it, rename it, or kill it"),
             ("right-click a host",
-             "star it, check again, new session, files, passwords, forget it"),
+             "star or move it, check again, new session, files, passwords, forget"),
             ("right-click the screen", "copy, paste, and every link on it"),
             ("hover a session", "the bin at the end of the row kills it"),
             ("+ / server icon", "new session here / add a host to ~/.ssh/config"),
@@ -816,10 +882,14 @@ class Conn(Gtk.ApplicationWindow):
 
     def host_menu(self, row, host: str, x: float, y: float) -> None:
         items = [("Unstar" if host in self.starred else "Star",
-                  lambda: self.toggle_star(host), False),
-                 ("Check again", lambda: self.recheck(host), False),
-                 ("New session...", lambda: self.prompt_new_session(host), False),
-                 ("Passwords and keys...", lambda: self.show_secrets(host), False)]
+                  lambda: self.toggle_star(host), False)]
+        if self.can_move(host, -1):
+            items.append(("Move up", lambda: self.move_host(host, -1), False))
+        if self.can_move(host, 1):
+            items.append(("Move down", lambda: self.move_host(host, 1), False))
+        items += [("Check again", lambda: self.recheck(host), False),
+                  ("New session...", lambda: self.prompt_new_session(host), False),
+                  ("Passwords and keys...", lambda: self.show_secrets(host), False)]
         if hosts.is_local(host):
             items.append((f"Open {hosts.files_label(host)}",
                           lambda: hosts.open_files(str(hosts.files_root(host))),
@@ -1208,6 +1278,40 @@ class Conn(Gtk.ApplicationWindow):
         self.shape = []
         self.render()
 
+    def can_move(self, host: str, delta: int) -> bool:
+        return move_within_tier(self.order, self.starred, host, delta) is not None
+
+    def move_host(self, host: str, delta: int) -> None:
+        """Nudge a server one place up (-1) or down (+1) the list.
+
+        Within its own group: a starred host moves among the starred, an
+        unstarred one among the rest, so the row you moved is always one you
+        can see move. The arrangement is written down, so it outlives both a
+        restart and the next time the config is re-read.
+        """
+        moved = move_within_tier(self.order, self.starred, host, delta)
+        if moved is None:
+            self.notice(f"{host} is already at the "
+                        f"{'top' if delta < 0 else 'bottom'}")
+            return
+        self.order = moved
+        save_order(self.order)
+        self.shape = []
+        self.render()
+
+    def move_selected(self, delta: int) -> bool:
+        """ctrl-shift-up / down: move the host the selected session belongs to.
+
+        A session row implies its host, the same way "new session" reads it off
+        the selection. With nothing selected there is no host to mean, so the
+        key is left to the terminal rather than claimed to do nothing.
+        """
+        key = self.selected_key()
+        if key is None:
+            return False
+        self.move_host(key[0], delta)
+        return True
+
     def confirm_forget(self, host: str) -> None:
         """Ask before editing ~/.ssh/config, and offer to take the passwords
         with it.
@@ -1481,6 +1585,10 @@ class Conn(Gtk.ApplicationWindow):
                 return self.rename_selected()
             if name == "s":
                 return self.copy_screen()
+            if name == "up":
+                return self.move_selected(-1)
+            if name == "down":
+                return self.move_selected(1)
             # The + on most layouts is shift-=, so the ctrl-+ the guide
             # promises lands here, shift and all.
             if name in ("plus", "equal", "kp_add"):
@@ -1904,7 +2012,7 @@ class Conn(Gtk.ApplicationWindow):
     # -- the list ----------------------------------------------------------
 
     def load_hosts(self, connect: bool = True, force: bool = False) -> None:
-        self.order = hosts.list_hosts()
+        self.order = arrange(hosts.list_hosts(), read_order())
         for host in self.order:
             self.rows.setdefault(host, hosts.blank(host))
         for gone in [h for h in self.rows if h not in self.order]:

@@ -177,7 +177,8 @@ The `?` at the foot of the list has the marks, the keys and who wrote it.
 | hover a session | A bin appears: kill it, asked first -- there is no undo |
 | `ctrl-shift-k` | Kill the selected session |
 | `ctrl-shift-r` | Rename it -- local or remote, nothing running in it is interrupted |
-| right-click a row | Open, rename, kill -- and on a host, new session, files and its passwords |
+| `ctrl-shift-up` / `ctrl-shift-down` | Move the selected session's server up or down the list |
+| right-click a row | Open, rename, kill -- and on a host, star or move it, new session, files, passwords, forget |
 | `+` | New session on the selected host, local or remote |
 | server icon | Add a server to `~/.ssh/config` |
 | `F1` or `?` | The guide: what the marks mean, every key, and who wrote it |
