@@ -77,6 +77,10 @@ CONDITION_BAR = "▌\n▌\n▌"
 # have beside a session's state, and narrow enough to leave the terminal the
 # room it actually needs.
 SIDEBAR_WIDTH = 320
+# The fewest characters a host or session name keeps before it will ellipsize.
+# A floor under the label's minimum width, so a squeezed sidebar shortens the
+# longest names rather than collapsing every name to "lo...".
+NAME_FLOOR = 12
 
 REFRESH_SECONDS = 45     # the full sweep: uptime, disk, the session list
 WATCH_INTERVAL = 1.0     # how often the far side re-dumps a screen
@@ -2349,7 +2353,12 @@ class Conn(Gtk.ApplicationWindow):
         # Ellipsized, or the widest name decides how wide the sidebar is:
         # the list never scrolls sideways, so an unellipsizable label's
         # minimum width propagates up and past the fixed SIDEBAR_WIDTH.
+        # But ellipsize alone drops the minimum to a single character, so a
+        # squeezed sidebar (a narrow tile, a terminal claiming its columns)
+        # cut even "local" to "lo...". width-chars puts a floor back: short
+        # names stay whole, only a genuinely long one ellipsizes.
         label.set_ellipsize(Pango.EllipsizeMode.END)
+        label.set_width_chars(NAME_FLOOR)
         box.append(label)
 
         note = {"down": "down", "nokey": "no key"}.get(data["state"], "")
@@ -2421,7 +2430,8 @@ class Conn(Gtk.ApplicationWindow):
 
         name = Gtk.Label(label=session["name"], xalign=0)
         name.add_css_class("name")
-        name.set_ellipsize(Pango.EllipsizeMode.END)  # like the host label
+        name.set_ellipsize(Pango.EllipsizeMode.END)  # like the host label,
+        name.set_width_chars(NAME_FLOOR)             # floor and all
         box.append(name)
 
         tail = Gtk.Label(label=self._detail(session), xalign=1)

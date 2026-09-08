@@ -363,6 +363,23 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
           not isinstance(window.get_child(), Gtk.Paned),
           "a drag handle beside a list you click all day is a handle you "
           "catch by mistake")
+
+    # Ellipsizing the names stopped a long one widening the sidebar, but it
+    # also let a squeezed sidebar shrink "local" to "lo..."; a width-chars
+    # floor is what puts the readable minimum back.
+    host_row = next(r for r in rows(window)
+                    if getattr(r, "host", "") and getattr(r, "key", None) is None)
+    host_label = host_row.get_child().get_first_child()
+    check("a host name keeps a width-chars floor, so it cannot shrink to 'lo...'",
+          host_label.get_width_chars() == gui.NAME_FLOOR
+          and int(host_label.get_ellipsize()) != 0,
+          f"width_chars={host_label.get_width_chars()} "
+          f"ellipsize={int(host_label.get_ellipsize())}")
+    least, _ = host_row.get_preferred_size()
+    check("so the row will not collapse a short name when the sidebar is squeezed",
+          least.width >= 60,
+          f"row minimum={least.width}px -- an ellipsis-only floor is ~17px")
+
     window.updated.set_visible(False)
     window.unlock.set_visible(False)
 
