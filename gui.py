@@ -1486,9 +1486,11 @@ class Conn(Gtk.ApplicationWindow):
 
         rename_host moves only the Host line; the keyring secrets, the stars
         and the hand-arranged order are all filed under the old alias and are
-        this method's to carry over. Step 1 must land first -- everything
+        this method's to carry over. The config edit lands first -- everything
         after keys off the new name being in the config -- so a HostError there
-        aborts with nothing else touched.
+        aborts with nothing else touched. The keyring goes last and on a
+        worker: secret-tool can block on an unlock prompt, and every other
+        keyring path here is off the main thread for exactly that reason.
         """
         old = old.strip()
         new = new.strip()
@@ -1498,13 +1500,7 @@ class Conn(Gtk.ApplicationWindow):
             self._manager_note(str(exc), False)
             return
 
-        keyring_error = ""
-        try:
-            hosts.migrate_secrets(old, new)                  # 2. the keyring
-        except (hosts.HostError, OSError) as exc:
-            keyring_error = str(exc)
-
-        self.stop_stream(old)                                # 3. live views
+        self.stop_stream(old)                                # 2. live views
         for key in [k for k in self.open if k[0] == old]:
             self.close_session(self.open[key])
         self.streams.pop(old, None)
@@ -1513,7 +1509,7 @@ class Conn(Gtk.ApplicationWindow):
         self.probed.pop(old, None)
         self.streamed.pop(old, None)
 
-        if old in self.starred:                              # 4. the state files
+        if old in self.starred:                              # 3. the state files
             self.starred.discard(old)
             self.starred.add(new)
             save_stars(self.starred)
@@ -1521,19 +1517,24 @@ class Conn(Gtk.ApplicationWindow):
             self.order[self.order.index(old)] = new
             save_order(self.order)
 
-        self.load_hosts(connect=True)                        # 5. rebuild + probe
+        self.load_hosts(connect=True)                        # 4. rebuild + probe
         self.recheck(new)
 
-        self._manager_reload(new)                            # 6. the manager
-        said = f"renamed {old} to {new} -- old config kept at {backup.name}"
-        if keyring_error:
-            said += f"; passwords not moved: {keyring_error}"
-        self._manager_note(
-            f"renamed {old} to {new}"
-            + (f"; passwords not moved: {keyring_error}"
-               if keyring_error else ""),
-            ok=not keyring_error)
-        self.notice(said)
+        self._manager_reload(new)                            # 5. the manager
+        self._manager_note(f"renamed {old} to {new}")
+        self.notice(f"renamed {old} to {new} -- old config kept at {backup.name}")
+
+        # 6. the keyring, off the main thread. It stores each secret under the
+        # new name before clearing the old, so a failure part-way leaves some
+        # already moved -- which is why the note says "may not", not "not".
+        def carry():
+            try:
+                hosts.migrate_secrets(old, new)
+            except (hosts.HostError, OSError) as exc:
+                GLib.idle_add(self._manager_note,
+                              f"some passwords may not have moved: {exc}", False)
+        threading.Thread(target=carry, name=f"secrets-{old}",
+                         daemon=True).start()
 
     def confirm_kill(self, host: str, name: str) -> None:
         """Ask first. A killed session takes whatever it was doing with it,

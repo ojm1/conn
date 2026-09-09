@@ -507,19 +507,23 @@ def update_host(name: str, fields: dict) -> Path:
 
     inserts: list[str] = []
     for key, value in changes.items():
-        found = None
-        for index, line in enumerate(body):
-            parts = line.strip().split(None, 1) if line is not None else []
-            if parts and parts[0].lower() == key:
-                found = index
-                break
+        # Every occurrence, not the first: ssh is first-match-wins, so leaving
+        # a stale second copy of a directive behind would quietly override the
+        # edit -- clearing HostName but leaving a duplicate line is a rename
+        # that did not take. A block may legitimately repeat IdentityFile too.
+        matches = [i for i, line in enumerate(body)
+                   if line is not None
+                   and (line.strip().split(None, 1)[:1] or [""])[0].lower() == key]
         new_line = f"    {_DIRECTIVE[key]} {value}"
-        if value and found is None:
+        if value and not matches:
             inserts.append(new_line)
         elif value:
-            body[found] = new_line
-        elif found is not None:
-            body[found] = None      # remove: an empty value clears the line
+            body[matches[0]] = new_line          # the first carries the value
+            for extra in matches[1:]:
+                body[extra] = None               # the rest are stale copies
+        else:
+            for index in matches:                # remove: every occurrence goes
+                body[index] = None
     body = [line for line in body if line is not None]
 
     # New directives go directly under the Host line, in the order above, so

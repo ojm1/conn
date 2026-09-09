@@ -1035,6 +1035,9 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
         check("and the block travels with it, unchanged",
               hosts.host_config("webhost")["user"] == "alice",
               f"webhost={hosts.host_config('webhost')}")
+        # The keyring migration runs on a worker so a locked keyring cannot
+        # freeze the window, so wait for it rather than reading it too soon.
+        pump(lambda: migrated)
         check("and migrate_secrets is called to carry the keyring",
               migrated == [("example1", "webhost")], f"migrated={migrated}")
         check("and the star moves to the new name",

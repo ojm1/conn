@@ -684,6 +684,21 @@ def update_host_checks(check: Checks) -> None:
               hosts.host_config("m")["user"] == ""
               and "User" not in path.read_text())
 
+    # A hand-authored block can repeat a directive; ssh takes the first, so an
+    # edit that touched only the first would leave a stale copy in charge.
+    with temp_config("Host m\n    HostName x\n    HostName y\n    User bob\n") as path:
+        hosts.update_host("m", {"hostname": ""})
+        check("clearing a duplicated directive removes every copy",
+              "HostName" not in path.read_text()
+              and "User bob" in path.read_text(),
+              f"text={path.read_text()!r}")
+    with temp_config("Host m\n    IdentityFile ~/a\n    IdentityFile ~/b\n") as path:
+        hosts.update_host("m", {"identityfile": "~/c"})
+        check("setting a duplicated directive collapses it to one",
+              path.read_text().count("IdentityFile") == 1
+              and hosts.host_config("m")["identityfile"] == "~/c",
+              f"text={path.read_text()!r}")
+
     # Port 22 and empty both mean "drop the Port line".
     with temp_config("Host m\n    HostName x\n    Port 2222\n") as path:
         hosts.update_host("m", {"port": "22"})
