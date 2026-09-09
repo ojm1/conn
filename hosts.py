@@ -202,6 +202,48 @@ def backup_config() -> Path:
     return dest
 
 
+# The one reference for what may be written into a Host block. These values
+# become lines in a file whose directives run commands (ProxyCommand), and the
+# alias is later a shell argument and a path segment -- so what cannot be
+# written safely is refused, not quoted. A pasted "hostname" with a newline in
+# it was one ProxyCommand away from local code execution. add_host and
+# update_host both go through here, so the two agree on what is safe.
+
+def _check_alias(name: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9_.][A-Za-z0-9_.-]*", name):
+        raise HostError("Name must be one word of letters, digits, . _ or -, "
+                        "not starting with a dash.")
+
+
+def _check_hostname(hostname: str) -> None:
+    if not hostname:
+        raise HostError("Hostname or IP is required.")
+    if re.search(r"[^A-Za-z0-9_.:%-]", hostname) or hostname.startswith("-"):
+        raise HostError("Hostname can only use letters, digits and . : % _ -, "
+                        "and cannot start with a dash.")
+
+
+def _check_user(user: str) -> None:
+    if user and (re.search(r"[^A-Za-z0-9_.@-]", user)
+                 or user.startswith("-")):
+        raise HostError("User can only use letters, digits and . @ _ -, "
+                        "and cannot start with a dash.")
+
+
+def _check_port(port: str) -> None:
+    # Empty is allowed: it means "no Port directive", the default of 22.
+    if port and not port.isdigit():
+        raise HostError("Port must be a number.")
+
+
+def _check_identityfile(path: str) -> None:
+    # Only the injection is refused -- a newline or other control character
+    # would let the value forge a second directive line. Everything else is a
+    # path we do not second-guess. Empty means "no IdentityFile directive".
+    if re.search(r"[\x00-\x1f\x7f]", path):
+        raise HostError("Identity file path cannot contain control characters.")
+
+
 def add_host(name: str, hostname: str, user: str, port: str = "22") -> Path:
     """Insert a new Host block above the Host * defaults.
 
@@ -213,28 +255,12 @@ def add_host(name: str, hostname: str, user: str, port: str = "22") -> Path:
     user = user.strip()
     port = (port or "22").strip()
 
-    # These values become lines in a file whose directives run commands
-    # (ProxyCommand), and the alias is later a shell argument and a path
-    # segment -- so what cannot be written safely is refused, not quoted.
-    # A pasted "hostname" with a newline in it was one ProxyCommand away
-    # from local code execution.
-    if not re.fullmatch(r"[A-Za-z0-9_.][A-Za-z0-9_.-]*", name):
-        raise HostError("Name must be one word of letters, digits, . _ or -, "
-                        "not starting with a dash.")
-    if not hostname:
-        raise HostError("Hostname or IP is required.")
-    if (re.search(r"[^A-Za-z0-9_.:%-]", hostname)
-            or hostname.startswith("-")):
-        raise HostError("Hostname can only use letters, digits and . : % _ -, "
-                        "and cannot start with a dash.")
-    if user and (re.search(r"[^A-Za-z0-9_.@-]", user)
-                 or user.startswith("-")):
-        raise HostError("User can only use letters, digits and . @ _ -, "
-                        "and cannot start with a dash.")
+    _check_alias(name)
+    _check_hostname(hostname)
+    _check_user(user)
     if name in list_hosts():
         raise HostError(f"'{name}' is already in ~/.ssh/config.")
-    if not port.isdigit():
-        raise HostError("Port must be a number.")
+    _check_port(port)
 
     block = [f"Host {name}", f"    HostName {hostname}"]
     if user:
@@ -345,6 +371,198 @@ def remove_host(name: str) -> Path:
             start -= 1
         del lines[start:end]
 
+    SSH_CONFIG.write_text("\n".join(lines).rstrip("\n") + "\n")
+    SSH_CONFIG.chmod(0o600)
+    return backup
+
+
+# Which ssh directive a Site Manager field is written as, and the order new
+# ones are inserted in. The keys are what the GUI and host_config() speak; the
+# values are how ssh spells them (case is cosmetic -- ssh reads them either
+# way, but a file a person also edits should look like add_host wrote it).
+_DIRECTIVE = {"hostname": "HostName", "user": "User",
+              "port": "Port", "identityfile": "IdentityFile"}
+
+
+def _host_aliases(line: str) -> list[str] | None:
+    """The aliases a 'Host' line names, or None if the line is not one."""
+    parts = line.strip().split()
+    if len(parts) >= 2 and parts[0].lower() == "host":
+        return parts[1:]
+    return None
+
+
+def _starts_block(line: str) -> bool:
+    """Whether a line opens a new scope -- the boundary a Host block ends at.
+
+    ssh applies a block's directives until the next Host *or Match* line, so a
+    block that runs up to the next Host alone would reach into a Match block
+    sitting between the two: an edit meant for one host could then rewrite or
+    delete a directive that belongs to the Match.
+    """
+    first = line.strip().split()[:1]
+    return bool(first) and first[0].lower() in ("host", "match")
+
+
+def _find_block(lines: list[str], name: str) -> tuple[int, int] | None:
+    """(start, end) of the block `name` opens: its Host line, to the line that
+    begins the next block. None if no Host line names `name`."""
+    start = None
+    for index, line in enumerate(lines):
+        named = _host_aliases(line)
+        if named and name in named:
+            start = index
+            break
+    if start is None:
+        return None
+    end = start + 1
+    while end < len(lines) and not _starts_block(lines[end]):
+        end += 1
+    return start, end
+
+
+def host_config(name: str) -> dict:
+    """The block's OWN hostname/user/port/identityfile, exactly as written.
+
+    For editing the file, not connecting: Host * defaults and Match blocks are
+    deliberately left out, so what comes back is only what this block sets and
+    an empty string where it sets nothing. resolve() is the other question --
+    what ssh will actually use -- and folds those in.
+    """
+    name = name.strip()
+    if name not in config_hosts():
+        raise HostError(f"'{name}' is not in ~/.ssh/config.")
+    lines = SSH_CONFIG.read_text().splitlines()
+    start, end = _find_block(lines, name)
+    fields = {"hostname": "", "user": "", "port": "", "identityfile": ""}
+    for line in lines[start + 1:end]:
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2:
+            key = parts[0].lower()
+            # First wins, the way ssh reads a repeated directive within a block.
+            if key in fields and not fields[key]:
+                fields[key] = parts[1].strip()
+    return fields
+
+
+def host_line_aliases(name: str) -> list[str]:
+    """The other aliases sharing `name`'s Host line, [] if it stands alone.
+
+    A block is edited by the Host line it opens, and that line may name several
+    hosts -- the GUI shows these so an edit or a probe reads as applying to all
+    of them, which it does.
+    """
+    name = name.strip()
+    try:
+        lines = SSH_CONFIG.read_text().splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        named = _host_aliases(line)
+        if named and name in named:
+            return [alias for alias in named if alias != name]
+    raise HostError(f"'{name}' is not in ~/.ssh/config.")
+
+
+def update_host(name: str, fields: dict) -> Path:
+    """Set, replace or remove directives in `name`'s block, in place.
+
+    `fields` may carry any of hostname/user/port/identityfile. A validated
+    non-empty value sets or replaces that directive; an empty one removes it if
+    present. Port "22" removes it too -- 22 is ssh's default, which add_host
+    also leaves unwritten. Every other line in the block -- comments,
+    ProxyCommand, directives we do not touch -- and every other block is kept
+    exactly. Values are checked before the file is opened, so a bad one refuses
+    rather than being quoted into a line that could run a command.
+
+    The block edited is the one this alias's Host line opens, even when that
+    line is shared; that is correct ssh semantics, and host_line_aliases() is
+    how the GUI surfaces the sharing.
+    """
+    name = name.strip()
+    if name not in config_hosts():
+        raise HostError(f"'{name}' is not in ~/.ssh/config.")
+
+    changes: dict[str, str] = {}
+    for key in ("hostname", "user", "port", "identityfile"):
+        if key not in fields:
+            continue
+        value = (fields[key] or "").strip()
+        if key == "hostname" and value:
+            _check_hostname(value)
+        elif key == "user" and value:
+            _check_user(value)
+        elif key == "port":
+            _check_port(value)
+            if value == "22":
+                value = ""      # the default -- carried by absence, not a line
+        elif key == "identityfile" and value:
+            _check_identityfile(value)
+        changes[key] = value
+
+    backup = backup_config()
+    lines = SSH_CONFIG.read_text().splitlines()
+    start, end = _find_block(lines, name)
+    body = lines[start + 1:end]
+
+    inserts: list[str] = []
+    for key, value in changes.items():
+        found = None
+        for index, line in enumerate(body):
+            parts = line.strip().split(None, 1) if line is not None else []
+            if parts and parts[0].lower() == key:
+                found = index
+                break
+        new_line = f"    {_DIRECTIVE[key]} {value}"
+        if value and found is None:
+            inserts.append(new_line)
+        elif value:
+            body[found] = new_line
+        elif found is not None:
+            body[found] = None      # remove: an empty value clears the line
+    body = [line for line in body if line is not None]
+
+    # New directives go directly under the Host line, in the order above, so
+    # the result reads the way add_host lays a fresh block out.
+    merged = lines[:start + 1] + inserts + body + lines[end:]
+    SSH_CONFIG.write_text("\n".join(merged).rstrip("\n") + "\n")
+    SSH_CONFIG.chmod(0o600)
+    return backup
+
+
+def rename_host(old: str, new: str) -> Path:
+    """Swap the `old` alias token for `new` on its Host line, nothing else.
+
+    Any other alias on the line stays, and the block's directives are
+    untouched -- this is a relabel, not a move. The config is only half the
+    rename: the keyring secrets, stars and hand-arranged order are filed under
+    the old name and are the caller's to migrate (migrate_secrets does the
+    keyring half).
+    """
+    old = old.strip()
+    new = new.strip()
+    _check_alias(new)
+    if new in list_hosts():
+        raise HostError(f"'{new}' is already in ~/.ssh/config.")
+
+    try:
+        lines = SSH_CONFIG.read_text().splitlines()
+    except OSError as exc:
+        raise HostError(f"Cannot read ~/.ssh/config: {exc}") from exc
+
+    target_line = None
+    for index, line in enumerate(lines):
+        named = _host_aliases(line)
+        if named and old in named:
+            target_line = index
+            break
+    if target_line is None:
+        raise HostError(f"'{old}' is not in ~/.ssh/config.")
+
+    backup = backup_config()
+    swapped = [new if alias == old else alias
+               for alias in _host_aliases(lines[target_line])]
+    lines[target_line] = "Host " + " ".join(swapped)
     SSH_CONFIG.write_text("\n".join(lines).rstrip("\n") + "\n")
     SSH_CONFIG.chmod(0o600)
     return backup
@@ -1056,6 +1274,20 @@ def secret_clear(host: str, name: str) -> None:
         message = (done.stderr or "").strip()
         raise HostError(message.splitlines()[-1] if message
                         else "could not remove")
+
+
+def migrate_secrets(old: str, new: str) -> None:
+    """Re-file every keyring secret from host=old to host=new.
+
+    The keyring is a separate store from the config, keyed by the alias:
+    rename_host moves the Host line, this moves the secrets that were filed
+    against the old name so they still answer once it is renamed. Store before
+    clear, so a run interrupted between the two leaves a copy under both names
+    rather than none. A keyring with nothing to move is not an error.
+    """
+    for name in secret_names(old):
+        secret_store(new, name, secret_value(old, name))
+        secret_clear(old, name)
 
 
 # What a URL looks like, minus the punctuation that ends a sentence rather
