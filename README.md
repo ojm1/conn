@@ -178,9 +178,10 @@ The `?` at the foot of the list has the marks, the keys and who wrote it.
 | `ctrl-shift-k` | Kill the selected session |
 | `ctrl-shift-r` | Rename it -- local or remote, nothing running in it is interrupted |
 | `ctrl-shift-up` / `ctrl-shift-down` | Move the selected session's server up or down the list |
-| right-click a row | Open, rename, kill -- and on a host, star or move it, new session, files, passwords, forget |
+| right-click a row | Open, rename, kill -- and on a host, star or move it, new session, files, passwords, edit, forget |
 | `+` | New session on the selected host, local or remote |
 | server icon | Add a server to `~/.ssh/config` |
+| gear icon | The Site Manager: edit a server's settings, rename it, add or forget one, and keep its passwords |
 | `F1` or `?` | The guide: what the marks mean, every key, and who wrote it |
 
 There is no title bar. GTK hides it fullscreen, so nothing that matters could live there anyway --
@@ -238,6 +239,18 @@ an API key. They live in the desktop keyring, which the same login password alre
 "one password for all of it" is the arrangement that exists rather than a thing to build. conn
 stores nothing itself: a value is fetched when you press Show, masked again on Hide, and a copy is
 wiped off the clipboard after thirty seconds.
+
+## The Site Manager
+
+The gear at the top of the list -- or **Edit...** on a right-clicked host -- opens the Site Manager:
+the servers `~/.ssh/config` names down one side, and everything you can change about the selected
+one down the other. Its HostName, User, Port and IdentityFile, prefilled from the block and showing
+what ssh falls back to where the block is silent; the aliases it shares a `Host` line with, because
+an edit reaches all of them; and the same passwords and keys. **Save** writes the fields back --
+refusing an unsafe value rather than quoting it, since a config directive can run a command --
+**Rename...** relabels the server and carries its keyring secrets, star and place in the list across
+with it, and **Forget...** takes it out. Every write keeps the old config beside the new one. It is
+not modal: the list behind it updates as you go.
 
 ## First contact
 
