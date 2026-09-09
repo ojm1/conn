@@ -1227,12 +1227,30 @@ class Conn(Gtk.ApplicationWindow):
         scroller.set_vexpand(True)
         left.append(scroller)
 
+        # Reorder the servers here too -- the manager is where you keep them.
+        moves = Gtk.Box(spacing=6)
+        up_btn = Gtk.Button(label="Move up")
+        up_btn.set_hexpand(True)
+        up_btn.set_sensitive(False)
+        down_btn = Gtk.Button(label="Move down")
+        down_btn.set_hexpand(True)
+        down_btn.set_sensitive(False)
+        moves.append(up_btn)
+        moves.append(down_btn)
+        left.append(moves)
+
         add_btn = Gtk.Button(label="Add server...")
         left.append(add_btn)
         forget_btn = Gtk.Button(label="Forget...")
         forget_btn.add_css_class("destructive")
         forget_btn.set_visible(False)      # only with a host selected to forget
         left.append(forget_btn)
+
+        # A way out that is not the compositor's -- conn's own windows have no
+        # title bar to close from, and Escape does the same.
+        close_btn = Gtk.Button(label="Close")
+        close_btn.set_margin_top(6)
+        left.append(close_btn)
 
         # A body the selection rebuilds, over an inline note that outlives the
         # rebuild so a save or a rename can report into it.
@@ -1263,7 +1281,7 @@ class Conn(Gtk.ApplicationWindow):
             while (child := picker.get_first_child()) is not None:
                 picker.remove(child)
             chosen = None
-            for name in hosts.config_hosts():
+            for name in self._manager_hosts():
                 row = Gtk.ListBoxRow()
                 row.alias = name
                 label = Gtk.Label(label=name, xalign=0)
@@ -1294,6 +1312,10 @@ class Conn(Gtk.ApplicationWindow):
             while (child := body.get_first_child()) is not None:
                 body.remove(child)
             forget_btn.set_visible(bool(name))
+            order = self._manager_hosts()
+            at = order.index(name) if name in order else -1
+            up_btn.set_sensitive(at > 0)
+            down_btn.set_sensitive(0 <= at < len(order) - 1)
             if not name:
                 hint = Gtk.Label(
                     label="Pick a server on the left, or add one.", xalign=0)
@@ -1421,6 +1443,20 @@ class Conn(Gtk.ApplicationWindow):
         add_btn.connect("clicked", add_server)
         forget_btn.connect("clicked",
                            lambda _b: self.confirm_forget(self.manager_host))
+        up_btn.connect("clicked", lambda _b: self.manager_move(-1))
+        down_btn.connect("clicked", lambda _b: self.manager_move(1))
+        close_btn.connect("clicked", lambda _b: window.close())
+
+        # Escape closes it, the way a dialog does -- and there is no title bar
+        # with an x on it, which is what left Super+W as the only way out.
+        def on_key(_controller, keyval, _code, _state):
+            if keyval == Gdk.KEY_Escape:
+                window.close()
+                return True
+            return False
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", on_key)
+        window.add_controller(keys)
 
         def closed(_w):
             self.manager = None
@@ -1437,6 +1473,43 @@ class Conn(Gtk.ApplicationWindow):
                   else None)
         window.present()
         return window
+
+    def _manager_hosts(self) -> list[str]:
+        """The servers the manager lists: every one the config names, in the
+        arranged order the sidebar uses, with the invented "local" left out --
+        it has no Host block to edit."""
+        named = hosts.config_hosts()
+        known = set(named)
+        return ([h for h in self.order if h in known]
+                + [h for h in named if h not in self.order])
+
+    def manager_move(self, delta: int) -> None:
+        """Move the selected server up (-1) or down (+1) the manager's list.
+
+        A flat swap across the whole arrangement -- the manager is one list of
+        every server, not the sidebar's starred-then-folded split -- written to
+        the same order the sidebar reads, so a move here shows up there too.
+        """
+        host = self.manager_host
+        order = self._manager_hosts()
+        if self.manager is None or host not in order:
+            return
+        here = order.index(host)
+        there = here + delta
+        if not 0 <= there < len(order):
+            if self.manager_note is not None:
+                self.manager_note(f"{host} is already at the "
+                                  f"{'top' if delta < 0 else 'bottom'}", False)
+            return
+        other = order[there]
+        if host not in self.order or other not in self.order:
+            return       # order not yet synced with the config -- nothing to swap
+        a, b = self.order.index(host), self.order.index(other)
+        self.order[a], self.order[b] = self.order[b], self.order[a]
+        save_order(self.order)
+        self.shape = []
+        self.render()
+        self._manager_reload(host)
 
     def _manager_reload(self, select: str | None = None) -> None:
         if self.manager_reload is not None:

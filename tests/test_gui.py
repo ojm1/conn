@@ -976,6 +976,9 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
         "\n"
         "Host example2\n"
         "    HostName box.example.com\n")
+    # As the real app does after any config change: pick the new hosts up so
+    # self.order (which the manager's reorder swaps in) knows about them.
+    window.load_hosts(connect=False)
 
     def pump(predicate, limit=5.0):
         # Save runs update_host on a worker and reports back on an idle, so the
@@ -1018,6 +1021,20 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
         check("Save writes the fields back through update_host",
               saved["hostname"] == "10.0.0.9" and saved["user"] == "alice"
               and saved["port"] == "", f"saved={saved}")
+
+        # Reordering from the manager writes to the same order the sidebar reads.
+        window._manager_reload("example2")
+        before = window._manager_hosts()
+        window.manager_move(-1)
+        on_disk = [h for h in gui.read_order() if h in hosts.config_hosts()]
+        check("Move up in the manager reorders the servers and persists",
+              window._manager_hosts() == list(reversed(before))
+              and on_disk == list(reversed(before)),
+              f"before={before} after={window._manager_hosts()} disk={on_disk}")
+        window.manager_move(-1)
+        check("and a server already at the top does not move past it",
+              window._manager_hosts()[0] == "example2",
+              f"order={window._manager_hosts()}")
 
         # A rename is the whole migration: config, keyring (stubbed), the star
         # and the place in the hand-arranged order. The window is put in a

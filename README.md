@@ -249,8 +249,9 @@ what ssh falls back to where the block is silent; the aliases it shares a `Host`
 an edit reaches all of them; and the same passwords and keys. **Save** writes the fields back --
 refusing an unsafe value rather than quoting it, since a config directive can run a command --
 **Rename...** relabels the server and carries its keyring secrets, star and place in the list across
-with it, and **Forget...** takes it out. Every write keeps the old config beside the new one. It is
-not modal: the list behind it updates as you go.
+with it, and **Forget...** takes it out. **Move up** / **Move down** reorder the servers here too --
+the same order the sidebar reads. Every write keeps the old config beside the new one. It is not
+modal: the list behind it updates as you go. **Close** or **Escape** shuts it.
 
 ## First contact
 
