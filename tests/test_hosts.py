@@ -366,6 +366,7 @@ def stream_checks(check: Checks, gui) -> None:
 
     stub = Panel()
     stub.watchers = {}
+    stub.watch_lock = threading.Lock()
     stub.frames = queue.Queue()
     halt, poke = threading.Event(), threading.Event()
     spawned = []
