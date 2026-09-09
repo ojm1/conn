@@ -637,6 +637,17 @@ class Conn(Gtk.ApplicationWindow):
         self.inflight: set[str] = set()
         self.frames: queue.Queue = queue.Queue(maxsize=256)
         self.stopping = False
+        # The Site Manager, when one is open. Not modal, so it lives beside
+        # the window rather than in front of it; these are how a rename or a
+        # forget reaches back into it to redraw its list and report. None when
+        # closed. manager_gen drops a resolve() answer a host switch outran.
+        self.manager: Gtk.Window | None = None
+        self.manager_reload = None
+        self.manager_note = None
+        self.manager_refill = None
+        self.manager_host = ""
+        self.manager_fields: dict[str, Gtk.Entry] = {}
+        self.manager_gen = 0
 
         self._build()
         self._style()
@@ -784,10 +795,13 @@ class Conn(Gtk.ApplicationWindow):
             ("ctrl-click", "open a link in a session"),
             ("right-click a session", "open it, rename it, or kill it"),
             ("right-click a host",
-             "star or move it, check again, new session, files, passwords, forget"),
+             "star or move it, check again, new session, files, passwords, "
+             "edit, forget"),
             ("right-click the screen", "copy, paste, and every link on it"),
             ("hover a session", "the bin at the end of the row kills it"),
             ("+ / server icon", "new session here / add a host to ~/.ssh/config"),
+            ("gear icon", "the Site Manager -- edit, rename, add or forget a "
+             "server, and its passwords"),
         ]
         for offset, (key, means) in enumerate(rows):
             row = len(marks) + offset + 1
@@ -909,6 +923,7 @@ class Conn(Gtk.ApplicationWindow):
             items.append(("Install my key (ssh-copy-id)",
                           lambda: self.install_key(host), False))
         if host in hosts.config_hosts():
+            items.append(("Edit...", lambda: self.open_manager(host), False))
             items.append((f"Forget {host}...",
                           lambda: self.confirm_forget(host), True))
         self.popup(row, x, y, items)
@@ -1026,6 +1041,38 @@ class Conn(Gtk.ApplicationWindow):
         scroller.set_vexpand(True)
         outer.append(scroller)
 
+        add = self._secret_rows(host, listing)
+
+        buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
+        new = Gtk.Button(label="Add...")
+        new.connect("clicked", add)
+        close = Gtk.Button(label="Close")
+        close.connect("clicked", lambda _b: window.close())
+        buttons.append(new)
+        buttons.append(close)
+        outer.append(buttons)
+
+        note = Gtk.Label(
+            label="Kept in the desktop keyring, which your login password "
+                  "unlocks. conn stores nothing itself.", xalign=0)
+        note.add_css_class("detail")
+        note.set_wrap(True)
+        outer.append(note)
+
+        window.set_child(outer)
+        window.present()
+        return window
+
+    def _secret_rows(self, host: str, listing: Gtk.ListBox):
+        """Fill `listing` with a row per secret filed against `host` -- Show /
+        Hide, Copy with a 30-second wipe, and Forget -- and return the Add...
+        handler that stores a new one and refills.
+
+        The machinery show_secrets and the Site Manager share, so a secret
+        reads and behaves the same wherever it is shown. Nothing is stored by
+        conn and nothing is held in memory: a value is fetched when you ask to
+        see it and the field is emptied again on Hide.
+        """
         def refill():
             while (child := listing.get_first_child()) is not None:
                 listing.remove(child)
@@ -1132,26 +1179,361 @@ class Conn(Gtk.ApplicationWindow):
             self.ask(f"Keep for {host}", [("Name", ""), ("Value", "")], store,
                      secret="Value", lead="Keep for", heading=host)
 
-        buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
-        new = Gtk.Button(label="Add...")
-        new.connect("clicked", add)
-        close = Gtk.Button(label="Close")
-        close.connect("clicked", lambda _b: window.close())
-        buttons.append(new)
-        buttons.append(close)
-        outer.append(buttons)
-
-        note = Gtk.Label(
-            label="Kept in the desktop keyring, which your login password "
-                  "unlocks. conn stores nothing itself.", xalign=0)
-        note.add_css_class("detail")
-        note.set_wrap(True)
-        outer.append(note)
-
         refill()
-        window.set_child(outer)
+        return add
+
+    # -- the Site Manager --------------------------------------------------
+
+    def open_manager(self, host: str | None = None) -> Gtk.Window:
+        """The servers ~/.ssh/config names down one side, everything you can
+        change about the selected one down the other.
+
+        The right pane edits the block's own settings, shows the aliases it
+        shares its Host line with -- an edit reaches all of them -- and carries
+        the same passwords-and-keys machinery show_secrets does. Rename and
+        Forget are the whole-server actions; Save writes the fields back.
+
+        Not modal: it edits the very config the sidebar is drawn from, and the
+        point is to watch that list change behind it. transient_for so the
+        compositor keeps the two together. Called again while open, it
+        surfaces the one window rather than a second.
+        """
+        if self.manager is not None:
+            self.manager.present()
+            if host:
+                self._manager_reload(host)
+            return self.manager
+
+        window = Gtk.Window(title="Site Manager", transient_for=self)
+        window.set_default_size(780, 560)
+        split = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+
+        # The identity in the body -- conn's own window has no title bar, and
+        # nothing here trains you to read one -- then the list and the two
+        # whole-list actions under it.
+        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8,
+                       margin_top=14, margin_bottom=14,
+                       margin_start=14, margin_end=10)
+        left.set_size_request(220, -1)
+        title = Gtk.Label(label="Site Manager", xalign=0)
+        title.add_css_class("heading")
+        left.append(title)
+
+        picker = Gtk.ListBox()
+        picker.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_child(picker)
+        scroller.set_vexpand(True)
+        left.append(scroller)
+
+        add_btn = Gtk.Button(label="Add server...")
+        left.append(add_btn)
+        forget_btn = Gtk.Button(label="Forget...")
+        forget_btn.add_css_class("destructive")
+        forget_btn.set_visible(False)      # only with a host selected to forget
+        left.append(forget_btn)
+
+        # A body the selection rebuilds, over an inline note that outlives the
+        # rebuild so a save or a rename can report into it.
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
+                        margin_top=14, margin_bottom=14,
+                        margin_start=14, margin_end=14)
+        right.set_hexpand(True)
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        body.set_vexpand(True)
+        status = Gtk.Label(label="", xalign=0)
+        status.add_css_class("detail")
+        status.set_wrap(True)
+        right.append(body)
+        right.append(status)
+
+        split.append(left)
+        split.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+        split.append(right)
+        window.set_child(split)
+
+        def set_status(text, ok=True):
+            status.set_text(text)
+            status.remove_css_class("destructive")
+            if not ok:
+                status.add_css_class("destructive")
+
+        def load_list(select=None):
+            while (child := picker.get_first_child()) is not None:
+                picker.remove(child)
+            chosen = None
+            for name in hosts.config_hosts():
+                row = Gtk.ListBoxRow()
+                row.alias = name
+                label = Gtk.Label(label=name, xalign=0)
+                label.set_ellipsize(Pango.EllipsizeMode.END)
+                label.set_width_chars(NAME_FLOOR)
+                row.set_child(label)
+                picker.append(row)
+                if name == select:
+                    chosen = row
+            if chosen is not None:
+                picker.select_row(chosen)    # fires row-selected -> show_host
+            else:
+                picker.unselect_all()
+                show_host(None)
+
+        def fill_placeholders(gen, entries, effective):
+            # A late resolve() answer whose host has since been switched away
+            # from is dropped -- the entries it would fill are gone.
+            if gen != self.manager_gen or self.manager is None:
+                return GLib.SOURCE_REMOVE
+            for key, entry in entries.items():
+                if not entry.get_text():
+                    entry.set_placeholder_text(effective.get(key, ""))
+            return GLib.SOURCE_REMOVE
+
+        def show_host(name):
+            set_status("")
+            while (child := body.get_first_child()) is not None:
+                body.remove(child)
+            forget_btn.set_visible(bool(name))
+            if not name:
+                hint = Gtk.Label(
+                    label="Pick a server on the left, or add one.", xalign=0)
+                hint.add_css_class("detail")
+                body.append(hint)
+                return
+            try:
+                cfg = hosts.host_config(name)
+            except hosts.HostError as exc:
+                set_status(str(exc), ok=False)
+                return
+            try:
+                shared = hosts.host_line_aliases(name)
+            except hosts.HostError:
+                shared = []          # gone between the two reads: treat as alone
+
+            self.manager_host = name
+
+            top = Gtk.Box(spacing=6)
+            lead = Gtk.Label(label="Editing", xalign=0)
+            lead.add_css_class("detail")
+            top.append(lead)
+            subject = Gtk.Label(label=name, xalign=0)   # two labels: an
+            subject.add_css_class("heading")            # ampersand alias is a
+            top.append(subject)                         # name, not broken Pango
+            body.append(top)
+
+            if shared:
+                note = Gtk.Label(
+                    label="shares settings with: " + ", ".join(shared)
+                          + " -- changes apply to all", xalign=0)
+                note.add_css_class("detail")
+                note.set_wrap(True)
+                body.append(note)
+
+            entries: dict[str, Gtk.Entry] = {}
+            for label, key in (("Hostname", "hostname"), ("User", "user"),
+                               ("Port", "port"),
+                               ("IdentityFile", "identityfile")):
+                line = Gtk.Box(spacing=8)
+                caption = Gtk.Label(label=label, xalign=0)
+                caption.set_size_request(96, -1)
+                entry = Gtk.Entry()
+                entry.set_hexpand(True)
+                entry.set_text(cfg[key])
+                entry.connect("activate", self._manager_save)
+                entries[key] = entry
+                line.append(caption)
+                line.append(entry)
+                body.append(line)
+            self.manager_fields = entries
+
+            # The effective config as the placeholder of an empty field, so a
+            # blank Hostname still shows what ssh falls back to. On a worker:
+            # resolve() shells out to ssh -G. A generation stamp drops an
+            # answer a host switch has already moved past.
+            self.manager_gen += 1
+            gen = self.manager_gen
+
+            def placeholders():
+                effective = hosts.resolve(name)
+                GLib.idle_add(fill_placeholders, gen, entries, effective)
+            threading.Thread(target=placeholders,
+                             name=f"resolve-{name}", daemon=True).start()
+
+            def refill_fields():
+                try:
+                    fresh = hosts.host_config(self.manager_host)
+                except hosts.HostError:
+                    return
+                for field, entry in self.manager_fields.items():
+                    entry.set_text(fresh[field])
+            self.manager_refill = refill_fields
+
+            actions = Gtk.Box(spacing=8, margin_top=4)
+            save = Gtk.Button(label="Save")
+            save.add_css_class("suggested-action")
+            save.connect("clicked", self._manager_save)
+            rename = Gtk.Button(label="Rename...")
+            rename.connect("clicked", lambda _b: self._manager_rename(name))
+            actions.append(save)
+            actions.append(rename)
+            body.append(actions)
+
+            rule = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+            rule.set_margin_top(6)
+            rule.set_margin_bottom(6)
+            body.append(rule)
+
+            heading = Gtk.Label(label="Passwords and keys", xalign=0)
+            heading.add_css_class("host")
+            body.append(heading)
+
+            secret_list = Gtk.ListBox()
+            secret_list.set_selection_mode(Gtk.SelectionMode.NONE)
+            secret_scroll = Gtk.ScrolledWindow()
+            secret_scroll.set_child(secret_list)
+            secret_scroll.set_vexpand(True)
+            secret_scroll.set_min_content_height(80)
+            body.append(secret_scroll)
+            add_secret = self._secret_rows(name, secret_list)
+            new_secret = Gtk.Button(label="Add...", halign=Gtk.Align.START)
+            new_secret.connect("clicked", add_secret)
+            body.append(new_secret)
+
+        def add_server(_btn):
+            def create(values):
+                try:
+                    backup = hosts.add_host(
+                        values["Name"], values["Hostname"],
+                        values["User"], values["Port"] or "22")
+                except (hosts.HostError, OSError) as exc:
+                    set_status(str(exc), ok=False)
+                    return
+                self.load_hosts()
+                load_list(select=values["Name"])
+                set_status(f"added {values['Name']} -- "
+                           f"old config kept at {backup.name}")
+            self.ask("Add a server", [("Name", ""), ("Hostname", ""),
+                                      ("User", ""), ("Port", "22")], create)
+
+        picker.connect(
+            "row-selected",
+            lambda _l, r: show_host(getattr(r, "alias", None) if r else None))
+        add_btn.connect("clicked", add_server)
+        forget_btn.connect("clicked",
+                           lambda _b: self.confirm_forget(self.manager_host))
+
+        def closed(_w):
+            self.manager = None
+            self.manager_reload = None
+            self.manager_note = None
+            self.manager_refill = None
+            return False
+        window.connect("close-request", closed)
+
+        self.manager = window
+        self.manager_reload = load_list
+        self.manager_note = set_status
+        load_list(select=host if host and host in hosts.config_hosts()
+                  else None)
         window.present()
         return window
+
+    def _manager_reload(self, select: str | None = None) -> None:
+        if self.manager_reload is not None:
+            self.manager_reload(select)
+
+    def _manager_note(self, text: str, ok: bool = True) -> bool:
+        if self.manager_note is not None:
+            self.manager_note(text, ok)
+        return GLib.SOURCE_REMOVE
+
+    def _manager_save(self, _widget=None) -> None:
+        """Write the four fields back to the selected host's block.
+
+        On a worker for consistency with everything else that edits the config
+        -- these are quick file writes, but one path serves them all.
+        update_host refuses an unsafe value before it writes, so a HostError
+        reports inline and nothing changed. The fields are re-read from the
+        file afterwards, so a normalised value -- a dropped Port 22, say --
+        shows as it was actually written.
+        """
+        host = self.manager_host
+        fields = {key: entry.get_text().strip()
+                  for key, entry in self.manager_fields.items()}
+
+        def work():
+            try:
+                backup = hosts.update_host(host, fields)
+            except (hosts.HostError, OSError) as exc:
+                GLib.idle_add(self._manager_note, str(exc), False)
+                return
+            GLib.idle_add(self._manager_saved, backup)
+        threading.Thread(target=work, name=f"save-{host}", daemon=True).start()
+
+    def _manager_saved(self, backup) -> bool:
+        if self.manager_refill is not None:
+            self.manager_refill()
+        self._manager_note(f"saved -- old config kept at {backup.name}")
+        return GLib.SOURCE_REMOVE
+
+    def _manager_rename(self, old: str) -> None:
+        self.ask(f"Rename {old}", [("New name", old)],
+                 lambda values: self.migrate_host(old, values["New name"]),
+                 lead="Rename", heading=old)
+
+    def migrate_host(self, old: str, new: str) -> None:
+        """The whole of a rename, in an order an interruption survives.
+
+        rename_host moves only the Host line; the keyring secrets, the stars
+        and the hand-arranged order are all filed under the old alias and are
+        this method's to carry over. Step 1 must land first -- everything
+        after keys off the new name being in the config -- so a HostError there
+        aborts with nothing else touched.
+        """
+        old = old.strip()
+        new = new.strip()
+        try:
+            backup = hosts.rename_host(old, new)             # 1. the config
+        except (hosts.HostError, OSError) as exc:
+            self._manager_note(str(exc), False)
+            return
+
+        keyring_error = ""
+        try:
+            hosts.migrate_secrets(old, new)                  # 2. the keyring
+        except (hosts.HostError, OSError) as exc:
+            keyring_error = str(exc)
+
+        self.stop_stream(old)                                # 3. live views
+        for key in [k for k in self.open if k[0] == old]:
+            self.close_session(self.open[key])
+        self.streams.pop(old, None)
+        self.rows.pop(old, None)
+        self.inflight.discard(old)
+        self.probed.pop(old, None)
+        self.streamed.pop(old, None)
+
+        if old in self.starred:                              # 4. the state files
+            self.starred.discard(old)
+            self.starred.add(new)
+            save_stars(self.starred)
+        if old in self.order:
+            self.order[self.order.index(old)] = new
+            save_order(self.order)
+
+        self.load_hosts(connect=True)                        # 5. rebuild + probe
+        self.recheck(new)
+
+        self._manager_reload(new)                            # 6. the manager
+        said = f"renamed {old} to {new} -- old config kept at {backup.name}"
+        if keyring_error:
+            said += f"; passwords not moved: {keyring_error}"
+        self._manager_note(
+            f"renamed {old} to {new}"
+            + (f"; passwords not moved: {keyring_error}"
+               if keyring_error else ""),
+            ok=not keyring_error)
+        self.notice(said)
 
     def confirm_kill(self, host: str, name: str) -> None:
         """Ask first. A killed session takes whatever it was doing with it,
@@ -1393,6 +1775,12 @@ class Conn(Gtk.ApplicationWindow):
 
         self.load_hosts()
         self.notice(f"forgot {host} -- old config kept at {backup.name}")
+        # The Site Manager, if open, is drawn from the same config: drop the
+        # forgotten host from its list, keeping the selection on whatever it
+        # was showing unless that is the host that just went.
+        keep = self.manager_host
+        self._manager_reload(keep if self.manager is not None
+                             and keep in hosts.config_hosts() else None)
 
         # A server you have forgotten should not keep a mountpoint or its
         # keyring entries. On a worker, like do_mount(): fusermount blocks
@@ -1823,6 +2211,9 @@ class Conn(Gtk.ApplicationWindow):
              lambda: self.prompt_new_session()),
             ("network-server-symbolic", "Add a server to ~/.ssh/config",
              lambda: self.prompt_add_host()),
+            ("emblem-system-symbolic",
+             "Manage servers -- edit, rename, add or forget",
+             lambda: self.open_manager()),
             ("view-refresh-symbolic", "Refresh every host now",
              lambda: self.load_hosts(force=True)),
         ):
