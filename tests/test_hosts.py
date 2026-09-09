@@ -16,6 +16,7 @@ the way test_gui.py does without a display.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import queue
 import subprocess
@@ -466,6 +467,334 @@ def drain_checks(check: Checks, gui) -> None:
     check("but never two probes at once", probed == [], f"probed={probed}")
 
 
+# ---------------------------------------------------------------------------
+# Editing ~/.ssh/config: host_config, host_line_aliases, update_host,
+# rename_host. Every edit is made to a config of our own -- hosts.SSH_CONFIG is
+# pointed at a temp file and put back afterwards -- so nothing of yours is read
+# or rewritten, and the suite never runs ssh itself.
+# ---------------------------------------------------------------------------
+
+# A config that carries every shape the editors have to survive: a plain block
+# with all four directives, a block sharing its Host line with a second alias,
+# a comment banner, a ProxyCommand, an Include and a Match block that must come
+# through untouched, and the Host * defaults that must not fold into any block.
+RICH = """\
+# my servers
+
+Host web-1
+    HostName 10.0.0.1
+    User deploy
+    Port 2222
+    # note about this host
+    ProxyCommand corkscrew proxy 8080 %h %p
+
+Host db shared-db
+    HostName 10.0.0.2
+
+Include ~/.ssh/extra
+
+Match host bastion
+    ForwardAgent yes
+
+Host *
+    ServerAliveInterval 30
+    IdentityFile ~/.ssh/id_ed25519
+"""
+
+# The fake keyring: a secret-tool on PATH backed by a JSON file, so
+# migrate_secrets is exercised end to end without ever touching the real
+# keyring. store/lookup/clear/search are the four verbs hosts.py speaks.
+FAKE_SECRET_TOOL = r'''#!/usr/bin/env python3
+import json, os, sys
+manifest = os.path.join(os.environ["FAKE_KEYRING"], "manifest.json")
+args = sys.argv[1:]
+cmd = args[0] if args else ""
+
+def val(key):
+    for i, a in enumerate(args):
+        if a == key and i + 1 < len(args):
+            return args[i + 1]
+    return None
+
+try:
+    with open(manifest) as f:
+        items = json.load(f)
+except (OSError, ValueError):
+    items = []
+
+def save(rows):
+    with open(manifest, "w") as f:
+        json.dump(rows, f)
+
+host, name = val("host"), val("name")
+if cmd == "store":
+    data = sys.stdin.read()
+    items = [r for r in items if not (r["host"] == host and r["name"] == name)]
+    items.append({"host": host, "name": name, "value": data})
+    save(items)
+elif cmd == "lookup":
+    for r in items:
+        if r["host"] == host and r["name"] == name:
+            sys.stdout.write(r["value"])
+            sys.exit(0)
+    sys.exit(1)
+elif cmd == "clear":
+    save([r for r in items if not (r["host"] == host and r["name"] == name)])
+elif cmd == "search":
+    for r in items:
+        if r["host"] == host:
+            sys.stderr.write("attribute.name = %s\n" % r["name"])
+sys.exit(0)
+'''
+
+
+@contextlib.contextmanager
+def temp_config(text: str = ""):
+    """Point hosts.SSH_CONFIG at a temp file holding `text`, and restore it."""
+    was = hosts.SSH_CONFIG
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "config"
+        path.write_text(text)
+        hosts.SSH_CONFIG = path
+        try:
+            yield path
+        finally:
+            hosts.SSH_CONFIG = was
+
+
+def _raised(call) -> str:
+    """The message a HostError carried, or "" if the call did not raise one."""
+    try:
+        call()
+    except hosts.HostError as exc:
+        return str(exc)
+    return ""
+
+
+def structurally_sound(text: str) -> bool:
+    """A stand-in for "ssh can still parse it", without running ssh: every Host
+    or Match header opens at the left margin, and no directive floats indented
+    above the first block. Catches an edit that unindented a header or let a
+    line escape its block -- the ways a rewrite breaks the file's structure."""
+    seen_header = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indented = line[:1] in (" ", "\t")
+        first = stripped.split()[0].lower()
+        if first in ("host", "match"):
+            if indented:
+                return False
+            seen_header = True
+        elif indented and not seen_header:
+            return False
+    return True
+
+
+def config_read_checks(check: Checks) -> None:
+    with temp_config(RICH):
+        web = hosts.host_config("web-1")
+        check("a block's own directives come back as written",
+              web == {"hostname": "10.0.0.1", "user": "deploy",
+                      "port": "2222", "identityfile": ""},
+              f"got={web}")
+        check("the Host * IdentityFile is not folded into a block that has "
+              "none of its own", web["identityfile"] == "")
+        db = hosts.host_config("shared-db")
+        check("a shared Host line reads the same block from either alias",
+              db == hosts.host_config("db")
+              and db["hostname"] == "10.0.0.2", f"got={db}")
+        check("a name the file does not carry is refused",
+              _raised(lambda: hosts.host_config("ghost")))
+        check("and so is the wildcard, which config_hosts never lists",
+              _raised(lambda: hosts.host_config("*")))
+
+        check("the other aliases on a shared line are surfaced",
+              hosts.host_line_aliases("db") == ["shared-db"]
+              and hosts.host_line_aliases("shared-db") == ["db"])
+        check("a block that stands alone shares its line with nobody",
+              hosts.host_line_aliases("web-1") == [])
+        check("aliases of a name not present is refused",
+              _raised(lambda: hosts.host_line_aliases("ghost")))
+
+
+def update_host_checks(check: Checks) -> None:
+    with temp_config(RICH) as path:
+        before = path.read_text()
+        backup = hosts.update_host("web-1", {"hostname": "192.168.1.5",
+                                             "user": "", "port": "",
+                                             "identityfile": "~/.ssh/web1_key"})
+        text = path.read_text()
+        check("a replace, an insert and two removes land together",
+              hosts.host_config("web-1") == {"hostname": "192.168.1.5",
+                                             "user": "", "port": "",
+                                             "identityfile": "~/.ssh/web1_key"},
+              f"got={hosts.host_config('web-1')}")
+        check("the replaced directive keeps its indent",
+              "\n    HostName 192.168.1.5\n" in text)
+        check("the inserted directive is written like add_host would",
+              "\n    IdentityFile ~/.ssh/web1_key\n" in text)
+        check("the removed directives are gone",
+              "User deploy" not in text and "Port 2222" not in text)
+        check("comments and unknown directives in the block survive",
+              "# note about this host" in text
+              and "    ProxyCommand corkscrew proxy 8080 %h %p" in text)
+        check("the Include and the Match block are untouched",
+              "Include ~/.ssh/extra" in text
+              and "Match host bastion" in text
+              and "    ForwardAgent yes" in text)
+        check("the Host * defaults are untouched",
+              "Host *" in text and "    ServerAliveInterval 30" in text
+              and "    IdentityFile ~/.ssh/id_ed25519" in text)
+        check("the file still parses as ssh config",
+              structurally_sound(text))
+        check("every alias is still named",
+              hosts.config_hosts() == ["web-1", "db", "shared-db"],
+              f"got={hosts.config_hosts()}")
+        check("the backup holds what was there before, and the file stays 0600",
+              backup.read_text() == before
+              and (path.stat().st_mode & 0o777) == 0o600)
+
+    # Insert vs replace, in isolation.
+    with temp_config("Host m\n    HostName x\n") as path:
+        hosts.update_host("m", {"user": "bob"})
+        check("setting a directive the block lacks inserts it",
+              hosts.host_config("m")["user"] == "bob"
+              and path.read_text().count("    User ") == 1)
+        hosts.update_host("m", {"user": "carol"})
+        check("setting one it already has replaces in place, not twice",
+              hosts.host_config("m")["user"] == "carol"
+              and path.read_text().count("    User ") == 1,
+              f"text={path.read_text()!r}")
+
+    # Several inserts at once arrive in a fixed order, under the Host line.
+    with temp_config("Host m\n    HostName x\n") as path:
+        hosts.update_host("m", {"port": "2200", "user": "bob",
+                               "identityfile": "~/.ssh/mkey"})
+        check("new directives are inserted in a stable order under the header",
+              "Host m\n    User bob\n    Port 2200\n"
+              "    IdentityFile ~/.ssh/mkey\n    HostName x\n"
+              in path.read_text(), f"text={path.read_text()!r}")
+
+    # Removing a directive with an empty value.
+    with temp_config("Host m\n    HostName x\n    User bob\n") as path:
+        hosts.update_host("m", {"user": ""})
+        check("an empty value removes the directive",
+              hosts.host_config("m")["user"] == ""
+              and "User" not in path.read_text())
+
+    # Port 22 and empty both mean "drop the Port line".
+    with temp_config("Host m\n    HostName x\n    Port 2222\n") as path:
+        hosts.update_host("m", {"port": "22"})
+        check("Port 22 is the default and is removed, not written",
+              "Port" not in path.read_text())
+        check("removing a Port that is already absent is a quiet no-op",
+              _raised(lambda: hosts.update_host("m", {"port": "22"})) == ""
+              and "Port" not in path.read_text())
+
+    # Editing through a shared alias edits the one shared block.
+    with temp_config("Host db shared-db\n    HostName 10.0.0.2\n") as path:
+        hosts.update_host("shared-db", {"user": "admin"})
+        check("an edit through one alias reaches the block both share",
+              hosts.host_config("db")["user"] == "admin"
+              and hosts.host_config("shared-db")["user"] == "admin")
+
+    # Bad values are refused before the file is opened.
+    with temp_config(RICH) as path:
+        before = path.read_text()
+        for bak in path.parent.glob("config.bak.*"):
+            bak.unlink()
+        bad = {"a space in the host": {"hostname": "bad host"},
+               "a hostname leading with a dash": {"hostname": "-nope"},
+               "a shell metacharacter in the user": {"user": "we;rm"},
+               "a non-numeric port": {"port": "22a"},
+               "a newline in the identity file": {
+                   "identityfile": "~/.ssh/k\nProxyCommand evil"}}
+        refused = all(_raised(lambda f=f: hosts.update_host("web-1", f))
+                      for f in bad.values())
+        check("every unsafe value is refused with HostError",
+              refused, f"labels={list(bad)}")
+        check("a refused edit leaves the file and its backups alone",
+              path.read_text() == before
+              and "ProxyCommand evil" not in path.read_text()
+              and list(path.parent.glob("config.bak.*")) == [])
+        check("editing a host that is not there is refused",
+              _raised(lambda: hosts.update_host("ghost", {"user": "x"})))
+
+
+def rename_host_checks(check: Checks) -> None:
+    with temp_config("Host db shared-db\n    HostName 10.0.0.2\n"
+                     "    User admin\n\nHost web-1\n"
+                     "    HostName 10.0.0.1\n") as path:
+        backup = hosts.rename_host("shared-db", "replica")
+        text = path.read_text()
+        check("the old token is swapped and the other alias stays",
+              "Host db replica\n" in text and "shared-db" not in text)
+        check("the block's directives are left untouched",
+              "    HostName 10.0.0.2" in text and "    User admin" in text)
+        check("the config now names the new alias, not the old",
+              "replica" in hosts.config_hosts()
+              and "shared-db" not in hosts.config_hosts())
+        check("the shared block is still reachable from the new name",
+              hosts.host_line_aliases("replica") == ["db"])
+        check("it still parses, and the backup and mode are as for any edit",
+              structurally_sound(text) and backup.read_text()
+              and (path.stat().st_mode & 0o777) == 0o600)
+
+        check("renaming onto a name already in the config is refused",
+              _raised(lambda: hosts.rename_host("db", "web-1")))
+        check("renaming onto the reserved 'local' is refused too",
+              _raised(lambda: hosts.rename_host("db", "local")))
+        check("an invalid new name is refused",
+              _raised(lambda: hosts.rename_host("db", "-bad"))
+              and _raised(lambda: hosts.rename_host("db", "two words")))
+        check("renaming a host that is not there is refused",
+              _raised(lambda: hosts.rename_host("ghost", "fresh")))
+        check("a refused rename changed nothing",
+              path.read_text() == text)
+
+
+def migrate_secrets_checks(check: Checks) -> None:
+    """migrate_secrets end to end against a fake secret-tool on PATH -- the one
+    function that talks to the keyring, never let near the real one."""
+    with tempfile.TemporaryDirectory() as tmp:
+        fakebin = Path(tmp) / "bin"
+        fakebin.mkdir()
+        store = Path(tmp) / "store"
+        store.mkdir()
+        tool = fakebin / "secret-tool"
+        tool.write_text(FAKE_SECRET_TOOL)
+        tool.chmod(0o755)
+        was_path = os.environ["PATH"]
+        was_kr = os.environ.get("FAKE_KEYRING")
+        os.environ["PATH"] = f"{fakebin}:{was_path}"
+        os.environ["FAKE_KEYRING"] = str(store)
+        try:
+            hosts.secret_store("old-box", "password", "s3cr3t")
+            hosts.secret_store("old-box", "api-token", "tok-42")
+            check("the fake keyring files and lists what it is given",
+                  hosts.secret_names("old-box") == ["api-token", "password"],
+                  f"got={hosts.secret_names('old-box')}")
+            hosts.migrate_secrets("old-box", "new-box")
+            check("migrate re-files every secret under the new host",
+                  hosts.secret_names("new-box") == ["api-token", "password"]
+                  and hosts.secret_value("new-box", "password") == "s3cr3t"
+                  and hosts.secret_value("new-box", "api-token") == "tok-42",
+                  f"got={hosts.secret_names('new-box')}")
+            check("and clears them from the old host",
+                  hosts.secret_names("old-box") == [])
+            check("a host with nothing filed migrates without error",
+                  _raised(lambda: hosts.migrate_secrets("empty", "other")) == ""
+                  and hosts.secret_names("other") == [])
+        finally:
+            os.environ["PATH"] = was_path
+            if was_kr is None:
+                os.environ.pop("FAKE_KEYRING", None)
+            else:
+                os.environ["FAKE_KEYRING"] = was_kr
+
+
 def main() -> int:
     check = Checks()
     frame_checks(check)
@@ -473,6 +802,10 @@ def main() -> int:
     mounts_table_checks(check)
     mount_action_checks(check)
     ssh_mount_script_checks(check)
+    config_read_checks(check)
+    update_host_checks(check)
+    rename_host_checks(check)
+    migrate_secrets_checks(check)
 
     gui = load_gui()
     if gui is None:
