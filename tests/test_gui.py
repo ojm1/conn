@@ -959,6 +959,100 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     else:
         print("keyring round trip skipped -- CONN_TEST_KEYRING=1 runs it")
 
+    # -- the Site Manager ---------------------------------------------------
+    # The window above came up on the empty config. A config of two named
+    # hosts is written now so the manager has something to list, and the three
+    # calls that would leave this machine -- resolve() and probe() shelling out
+    # to ssh, migrate_secrets() to the real keyring -- are stubbed for the
+    # duration. What is under test is the manager's own file edits, which go
+    # through the temp config; the keyring move is asserted by the stub having
+    # been called, the round trip itself being covered above under
+    # CONN_TEST_KEYRING.
+    hosts.SSH_CONFIG.write_text(
+        "Host example1\n"
+        "    HostName 10.0.0.1\n"
+        "    User alice\n"
+        "    Port 2222\n"
+        "\n"
+        "Host example2\n"
+        "    HostName box.example.com\n")
+
+    def pump(predicate, limit=5.0):
+        # Save runs update_host on a worker and reports back on an idle, so the
+        # check waits on the file rather than guessing how long that takes.
+        ctx = gui.GLib.MainContext.default()
+        deadline = time.monotonic() + limit
+        while not predicate() and time.monotonic() < deadline:
+            ctx.iteration(False)
+            time.sleep(0.01)
+
+    def manager_aliases():
+        return [getattr(w, "alias", None) for w in walk(window.manager)
+                if getattr(w, "alias", None) is not None]
+
+    real_resolve, real_probe = hosts.resolve, hosts.probe
+    real_migrate = hosts.migrate_secrets
+    migrated: list = []
+    hosts.resolve = lambda h: {"user": "", "hostname": h,
+                               "port": "22", "identityfile": ""}
+    hosts.probe = lambda h: hosts.blank(h)
+    hosts.migrate_secrets = lambda old, new: migrated.append((old, new))
+    try:
+        window.open_manager()
+        check("the Site Manager lists the config's hosts",
+              manager_aliases() == ["example1", "example2"],
+              f"aliases={manager_aliases()}")
+
+        window._manager_reload("example1")
+        got = {k: e.get_text() for k, e in window.manager_fields.items()}
+        check("selecting a host prefills its fields from host_config",
+              got == {"hostname": "10.0.0.1", "user": "alice",
+                      "port": "2222", "identityfile": ""},
+              f"got={got}")
+
+        window.manager_fields["hostname"].set_text("10.0.0.9")
+        window.manager_fields["port"].set_text("22")   # ssh's default: dropped
+        window._manager_save()
+        pump(lambda: hosts.host_config("example1")["hostname"] == "10.0.0.9")
+        saved = hosts.host_config("example1")
+        check("Save writes the fields back through update_host",
+              saved["hostname"] == "10.0.0.9" and saved["user"] == "alice"
+              and saved["port"] == "", f"saved={saved}")
+
+        # A rename is the whole migration: config, keyring (stubbed), the star
+        # and the place in the hand-arranged order. The window is put in a
+        # known state first.
+        window.starred = {"example1"}
+        gui.save_stars(window.starred)
+        window.order = ["example1", "example2"]
+        gui.save_order(window.order)
+        window.migrate_host("example1", "webhost")
+
+        check("Rename moves the alias in the config",
+              "webhost" in hosts.config_hosts()
+              and "example1" not in hosts.config_hosts(),
+              f"config={hosts.config_hosts()}")
+        check("and the block travels with it, unchanged",
+              hosts.host_config("webhost")["user"] == "alice",
+              f"webhost={hosts.host_config('webhost')}")
+        check("and migrate_secrets is called to carry the keyring",
+              migrated == [("example1", "webhost")], f"migrated={migrated}")
+        check("and the star moves to the new name",
+              "webhost" in window.starred and "example1" not in window.starred,
+              f"starred={window.starred}")
+        check("and it keeps its place in the order, in memory and on disk",
+              window.order[0] == "webhost" and "example1" not in window.order
+              and gui.read_order()[0] == "webhost",
+              f"order={window.order} file={gui.read_order()}")
+        check("and the manager's own list is redrawn under the new name",
+              "webhost" in manager_aliases() and "example1" not in manager_aliases(),
+              f"aliases={manager_aliases()}")
+    finally:
+        hosts.resolve, hosts.probe = real_resolve, real_probe
+        hosts.migrate_secrets = real_migrate
+        if window.manager is not None:
+            window.manager.close()   # emits close-request -> clears self.manager
+
 
 def rows(window):
     index = 0
