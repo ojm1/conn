@@ -679,6 +679,28 @@ def blank(host: str) -> dict:
     }
 
 
+def _probe_failure(last: str, host: str) -> tuple[str, str]:
+    """The state and reason for a probe that reached ssh but never opened the
+    session -- three problems with three different fixes.
+
+    A key ssh will not trust yet is first contact, not a dead box: a server you
+    just added answers, but the probe runs BatchMode and will not accept the
+    key for you, so it gets its own state and says how to log in -- rather than
+    sitting there red as "down", which reads as broken. Being let to the door
+    and refused (Permission denied) is the "no key" state: the box is up, the
+    login is not. Everything else is genuinely down. There is no authentication
+    on this machine, so a local failure is never a key problem.
+    """
+    if "Host key verification failed" in last:
+        return ("unverified",
+                "new server -- ssh does not trust its key yet. Right-click it "
+                "and open a session once to answer the fingerprint prompt and "
+                "log in; every probe after that rides the key you accept.")
+    if "Permission denied" in last and not is_local(host):
+        return ("nokey", last)
+    return ("down", last)
+
+
 def probe(host: str) -> dict:
     """Query one host. Never raises -- failure is a state, not an exception,
     because a dashboard that crashes on an offline box is useless."""
@@ -712,17 +734,7 @@ def probe(host: str) -> dict:
     if f"###{token}:END" not in done.stdout:
         stderr = (done.stderr or "").strip().splitlines()
         last = stderr[-1] if stderr else "unreachable"
-        # Reaching the box but being refused is a different problem from the
-        # box being off, and it has a specific fix, so it gets its own state.
-        # There is no authentication on this machine, so a local failure is
-        # never that -- offering to install a key would be nonsense.
-        refused = "Permission denied" in last and not is_local(host)
-        row["state"] = "nokey" if refused else "down"
-        if "Host key verification failed" in last:
-            row["error"] = ("host key not verified -- open a session once "
-                            "and answer ssh's fingerprint prompt")
-        else:
-            row["error"] = last
+        row["state"], row["error"] = _probe_failure(last, host)
         return row
 
     parts = _split_sections(done.stdout, token)

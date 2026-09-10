@@ -618,6 +618,20 @@ def config_read_checks(check: Checks) -> None:
         check("aliases of a name not present is refused",
               _raised(lambda: hosts.host_line_aliases("ghost")))
 
+    # A probe that reaches ssh but never opens the session: three problems,
+    # three states -- and a new server's untrusted key is its own first-contact
+    # state, not a dead "down".
+    state, why = hosts._probe_failure("Host key verification failed.", "box")
+    check("an untrusted host key is 'unverified', not 'down'",
+          state == "unverified" and "log in" in why, f"state={state} why={why!r}")
+    state, _ = hosts._probe_failure("Permission denied (publickey).", "box")
+    check("being reached and refused is 'nokey'", state == "nokey")
+    state, _ = hosts._probe_failure("Permission denied (publickey).", "local")
+    check("but a refusal from this machine is never a key problem",
+          state == "down")
+    state, _ = hosts._probe_failure("ssh: could not resolve hostname box", "box")
+    check("and an unreachable box is plainly 'down'", state == "down")
+
 
 def update_host_checks(check: Checks) -> None:
     with temp_config(RICH) as path:

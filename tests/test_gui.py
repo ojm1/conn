@@ -383,6 +383,23 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
     window.updated.set_visible(False)
     window.unlock.set_visible(False)
 
+    # A server you just added, whose key ssh will not trust yet, is first
+    # contact -- not a dead box. Its row says "log in" in the accent colour,
+    # not a red "down", so it reads as "authenticate me", not "broken".
+    first = window._host_row("newbox", {"state": "unverified",
+                                        "error": "new server -- log in",
+                                        "sessions": []})
+    notes = [w for w in walk(first)
+             if isinstance(w, Gtk.Label) and w.get_label() == "log in"]
+    check("a first-contact host says 'log in', standing out from a dead 'down'",
+          len(notes) == 1 and notes[0].has_css_class("attention"),
+          f"labels={[w.get_label() for w in walk(first) if isinstance(w, Gtk.Label)]}")
+    down = window._host_row("deadbox", {"state": "down", "error": "timed out",
+                                        "sessions": []})
+    check("while a genuinely down host stays a muted 'down'",
+          any(isinstance(w, Gtk.Label) and w.get_label() == "down"
+              and w.has_css_class("detail") for w in walk(down)))
+
     check("there is no title bar to lose them with",
           window.get_titlebar() is None and not window.get_decorated())
 

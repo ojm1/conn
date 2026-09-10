@@ -2458,6 +2458,7 @@ class Conn(Gtk.ApplicationWindow):
         .mark {{ font-family: monospace; font-weight: bold; }}
         .name {{ font-family: monospace; }}
         .detail {{ color: {p.muted}; font-size: 0.85em; }}
+        .attention {{ color: {p.accent}; font-size: 0.85em; font-weight: bold; }}
         .heading {{ color: {p.accent}; font-weight: bold;
                     font-family: monospace; }}
         .placeholder {{ color: {p.muted}; }}
@@ -2826,18 +2827,25 @@ class Conn(Gtk.ApplicationWindow):
         label.set_width_chars(NAME_FLOOR)
         box.append(label)
 
-        note = {"down": "down", "nokey": "no key"}.get(data["state"], "")
+        note = {"down": "down", "nokey": "no key",
+                "unverified": "log in"}.get(data["state"], "")
         if not note and data["state"] == "unknown":
             note = "checking"
         if note:
             tail = Gtk.Label(label=note, xalign=0)
-            tail.add_css_class("detail")
+            # First contact stands out in the accent colour: a server you just
+            # added needs a login, it is not broken, and a red "down" beside it
+            # reads as broken. Down and no-key stay muted.
+            tail.add_css_class("attention" if data["state"] == "unverified"
+                               else "detail")
             # The reason ssh gave, which is the difference between a box that
             # is off and a name that no longer resolves. Too long for the
-            # row, so it waits under the pointer.
+            # row, so it waits under the pointer. First contact spells out the
+            # fix itself, so it does not also point at "check again".
             if data.get("error"):
-                tail.set_tooltip_text(
-                    f"{data['error']}\n\nRight-click the host to check again.")
+                suffix = ("" if data["state"] == "unverified"
+                          else "\n\nRight-click the host to check again.")
+                tail.set_tooltip_text(f"{data['error']}{suffix}")
             box.append(tail)
         menu = Gtk.GestureClick()
         menu.set_button(3)
