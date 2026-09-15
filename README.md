@@ -88,7 +88,9 @@ the same for the transport: frame parsing, marker forgery, the mount table and `
 guards, all against fakes — no display, no network. The window itself is checked by
 `tests/test_gui.py`, which needs a display and a local tmux; it points the run at an ssh config
 and state files of its own (`CONN_SSH_CONFIG` overrides where `hosts.py` reads `~/.ssh/config` —
-ssh itself never sees it), so nothing of yours is probed or rewritten.
+ssh itself never sees it), so nothing of yours is probed or rewritten. `tests/test_theming.py` holds the
+colours to their contrast floors on every Omarchy theme installed, and checks the terminal palette
+against the one Omarchy gives foot — no display.
 
 Adding a third agent means writing its patterns as a class in `agent_state.py`; the callers do not
 change.
@@ -325,6 +327,14 @@ Colours follow the [Omarchy](https://omarchy.org) desktop theme when present, an
 built-in palette otherwise. `CONN_THEME=light|dark` forces it. Read once, at startup: a theme
 changed while conn is running shows up on the next start -- the sessions are tmux, so restarting
 costs nothing but the views.
+
+A theme's colours are used as it has them wherever they can be read. Secondary text is Omarchy's
+own recipe for it (the foreground mixed a third of the way to the background) rather than the
+theme's `muted`, which is a border shade; any text colour that still falls short of 4.5:1 on the
+surfaces it lands on -- 3:1 for the red, yellow and green state marks -- is made lighter or darker
+in its own hue until it clears. The session terminals get the theme's sixteen ANSI colours, the
+same ones foot does, with bright black lifted the same way, since that is what dim text is written
+in.
 
 ## The font is the one you already chose
 

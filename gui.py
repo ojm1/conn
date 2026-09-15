@@ -200,14 +200,23 @@ def notification(host: str, session: dict) -> "Gio.Notification":
     return note
 
 
-def mark_colour(palette, state: str) -> str:
+def mark_tone(state: str) -> str:
+    """The palette name a state is drawn in -- and, in the sidebar, the CSS
+    class that draws it."""
     if state in (agent_state.NEEDS_YOU, agent_state.DRAFT):
-        return palette.red
+        return "red"
     if state == agent_state.WORKING:
-        return palette.yellow
+        return "yellow"
     if state == agent_state.READY:
-        return palette.green
-    return palette.muted
+        return "green"
+    return "muted"
+
+
+MARK_TONES = ("red", "yellow", "green", "muted")
+
+
+def mark_colour(palette, state: str) -> str:
+    return getattr(palette, mark_tone(state))
 
 
 def rgba(colour: str) -> Gdk.RGBA:
@@ -369,8 +378,11 @@ class Session(Gtk.Box):
         self.term.set_font(Pango.FontDescription.from_string(
             font or terminal_font()))
         self.term.set_font_scale(zoom)
+        # The theme's sixteen, not VTE's: without them every ANSI colour in a
+        # session -- tmux's own status line included -- is VTE's stock one.
         self.term.set_colors(rgba(palette.foreground),
-                             rgba(palette.background), None)
+                             rgba(palette.background),
+                             [rgba(colour) for colour in palette.terminal])
         self.term.set_mouse_autohide(True)
         self.term.connect("child-exited", self._exited)
 
@@ -2467,16 +2479,23 @@ class Conn(Gtk.ApplicationWindow):
         .action {{ min-width: 26px; min-height: 26px; padding: 2px; }}
         .secret {{ font-family: monospace; }}
         .sidebar row {{ padding: 2px 10px; }}
-        .sidebar row:selected {{ background: {p.accent}; color: {p.background}; }}
+        .sidebar row:selected {{ background: {p.accent}; color: {p.on_accent}; }}
         /* Child labels carry their own colour, and one of them is the accent
            itself -- which on the accent-coloured selection is invisible. */
         .sidebar row:selected .slot,
         .sidebar row:selected .slot-open,
         .sidebar row:selected .name,
-        .sidebar row:selected .detail {{ color: {p.background}; }}
+        .sidebar row:selected .detail,
+        .sidebar row:selected .host,
+        .sidebar row:selected .attention,
+        .sidebar row:selected .mark {{ color: {p.on_accent}; }}
         .host {{ color: {p.muted}; font-weight: bold;
                  padding-top: 10px; letter-spacing: 0.06em; }}
         .mark {{ font-family: monospace; font-weight: bold; }}
+        .mark.red {{ color: {p.red}; }}
+        .mark.yellow {{ color: {p.yellow}; }}
+        .mark.green {{ color: {p.green}; }}
+        .mark.muted {{ color: {p.muted}; }}
         .name {{ font-family: monospace; }}
         .detail {{ color: {p.muted}; font-size: 0.85em; }}
         .attention {{ color: {p.accent}; font-size: 0.85em; font-weight: bold; }}
@@ -2492,7 +2511,7 @@ class Conn(Gtk.ApplicationWindow):
                  padding: 0; margin: 0; }}
         .sidebar row:hover .kill {{ opacity: 0.75; }}
         .sidebar row:hover .kill:hover {{ opacity: 1; }}
-        .sidebar row:selected .kill {{ color: {p.background}; opacity: 0.7; }}
+        .sidebar row:selected .kill {{ color: {p.on_accent}; opacity: 0.7; }}
         """
         provider = Gtk.CssProvider()
         provider.load_from_data(css.encode())
@@ -2785,8 +2804,7 @@ class Conn(Gtk.ApplicationWindow):
                     continue
                 state = session["agent"]["state"]
                 parts["mark"].set_label(MARKS.get(state, "?"))
-                parts["mark"].set_attributes(self._colour_attrs(
-                    mark_colour(self.palette, state)))
+                self._tone(parts["mark"], state)
                 parts["detail"].set_label(self._detail(session))
                 open_now = (host, session["name"]) in self.open
                 if open_now:
@@ -2918,8 +2936,7 @@ class Conn(Gtk.ApplicationWindow):
         mark = Gtk.Label(label=MARKS.get(state, "?"))
         mark.add_css_class("mark")
         mark.set_size_request(12, -1)
-        colour = mark_colour(self.palette, state)
-        mark.set_attributes(self._colour_attrs(colour))
+        self._tone(mark, state)
         box.append(mark)
 
         name = Gtk.Label(label=session["name"], xalign=0)
@@ -2957,6 +2974,18 @@ class Conn(Gtk.ApplicationWindow):
 
         row.set_child(box)
         return row
+
+    @staticmethod
+    def _tone(mark: Gtk.Label, state: str) -> None:
+        """A sidebar mark takes its colour from a class, not a Pango
+        attribute: an attribute outranks every stylesheet, so on the selected
+        row it stayed its own colour on the accent -- and once muted and the
+        accent were both lifted to the same floor, a shell's "." was drawn
+        1:1 on its own highlight."""
+        for tone in MARK_TONES:
+            if tone != mark_tone(state):
+                mark.remove_css_class(tone)
+        mark.add_css_class(mark_tone(state))
 
     @staticmethod
     def _colour_attrs(colour: str) -> Pango.AttrList:

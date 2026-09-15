@@ -462,6 +462,58 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
         finally:
             gui.ZOOM_STATE = was_zoom
 
+    # -- the colours reach the widgets -------------------------------------
+    # test_theming.py holds the palette to its floors; this is that the CSS
+    # carries it, measured on what GTK actually resolved for a heading --
+    # the label that used to be drawn in the theme's border shade.
+    headings = [c for c in walk(window.list)
+                if isinstance(c, Gtk.Label) and c.has_css_class("host")]
+    if headings:
+        drawn = headings[0].get_color()
+        drawn_hex = "#" + "".join(f"{round(v * 255):02x}" for v in
+                                  (drawn.red, drawn.green, drawn.blue))
+        ratio = theming.contrast(drawn_hex, window.palette.panel) or 0
+        check("a host heading is legible on the sidebar",
+              ratio >= theming.LEGIBLE - 0.05,
+              f"{drawn_hex} on {window.palette.panel} = {ratio:.2f} "
+              f"({window.palette.source})")
+    else:
+        check("the sidebar has a host heading to measure", False)
+
+    def drawn_in(label) -> str:
+        colour = label.get_color()
+        return "#" + "".join(f"{round(v * 255):02x}" for v in
+                             (colour.red, colour.green, colour.blue))
+
+    # A mark coloured by a Pango attribute outranks the stylesheet, so on the
+    # highlighted row it stayed its own colour on the accent -- a shell's "."
+    # at 1:1 on Nord. get_color() only tells the truth once the colour is CSS.
+    held = window.list.get_selected_row()
+    session_rows = [r for r in rows(window) if getattr(r, "key", None)]
+    if len(session_rows) >= 2:
+        chosen, other = session_rows[0], session_rows[1]
+        window.list.select_row(chosen)
+        marks = [c for c in walk(chosen) if isinstance(c, Gtk.Label)
+                 and c.has_css_class("mark")]
+        check("a mark on the highlighted row is drawn in the highlight's text",
+              bool(marks) and drawn_in(marks[0]) == window.palette.on_accent.lower()
+              and marks[0].get_attributes() is None,
+              f"{drawn_in(marks[0]) if marks else None} vs {window.palette.on_accent}")
+        other_marks = [c for c in walk(other) if isinstance(c, Gtk.Label)
+                       and c.has_css_class("mark")]
+        state = next(s for s in window.rows[other.key[0]]["sessions"]
+                     if s["name"] == other.key[1])["agent"]["state"]
+        check("and one on any other row in its state's colour",
+              bool(other_marks) and drawn_in(other_marks[0])
+              == gui.mark_colour(window.palette, state).lower(),
+              f"{drawn_in(other_marks[0]) if other_marks else None} state={state}")
+        if held is not None:
+            window.list.select_row(held)
+        else:
+            window.list.unselect_all()
+    else:
+        check("the sidebar has two sessions to compare", False)
+
     # -- killing -----------------------------------------------------------
     kills = [c for c in walk(row_for(window, alpha))
              if isinstance(c, Gtk.Button) and c.has_css_class("kill")]
