@@ -1039,6 +1039,22 @@ def run(window, check, gui, hosts, agent_state, Gtk) -> None:
               saved["hostname"] == "10.0.0.9" and saved["user"] == "alice"
               and saved["port"] == "", f"saved={saved}")
 
+        # The sidebar star, as a tickbox in the manager -- the same star, just
+        # a nicer place to reach it.
+        window._manager_reload("example1")
+        check("the show tickbox reflects the star",
+              window.manager_show.get_active() == ("example1" in window.starred),
+              f"active={window.manager_show.get_active()} "
+              f"starred={window.starred}")
+        was = "example1" in window.starred
+        window.manager_show.set_active(not was)
+        check("ticking it stars the server, unticking unstars",
+              ("example1" in window.starred) == (not was),
+              f"was={was} starred={window.starred}")
+        window.manager_show.set_active(was)      # leave it as we found it
+        check("and setting it back restores the star",
+              ("example1" in window.starred) == was, f"starred={window.starred}")
+
         # Reordering from the manager writes to the same order the sidebar reads.
         window._manager_reload("example2")
         before = window._manager_hosts()

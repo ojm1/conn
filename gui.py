@@ -647,6 +647,7 @@ class Conn(Gtk.ApplicationWindow):
         self.manager_refill = None
         self.manager_host = ""
         self.manager_fields: dict[str, Gtk.Entry] = {}
+        self.manager_show: Gtk.CheckButton | None = None
         self.manager_gen = 0
 
         self._build()
@@ -1351,6 +1352,25 @@ class Conn(Gtk.ApplicationWindow):
                 note.set_wrap(True)
                 body.append(note)
 
+            # The star, as a tickbox here rather than a right-click in the list:
+            # ticked shows the server at the top of the sidebar and watches it
+            # live; unticked folds it into "N more servers" and polls it slowly.
+            # It only acts on a real change, so setting it to match the current
+            # state below does not toggle anything.
+            show = Gtk.CheckButton(label="Show in the sidebar")
+            show.set_active(name in self.starred)
+            show.set_tooltip_text(
+                "Ticked: pinned to the top of the list and watched live. "
+                "Unticked: folded into \"N more servers\" and checked slowly "
+                "-- still counted, still notifies you.")
+
+            def toggled(button, host=name):
+                if button.get_active() != (host in self.starred):
+                    self.toggle_star(host)
+            show.connect("toggled", toggled)
+            self.manager_show = show
+            body.append(show)
+
             entries: dict[str, Gtk.Entry] = {}
             for label, key in (("Hostname", "hostname"), ("User", "user"),
                                ("Port", "port"),
@@ -1463,6 +1483,7 @@ class Conn(Gtk.ApplicationWindow):
             self.manager_reload = None
             self.manager_note = None
             self.manager_refill = None
+            self.manager_show = None
             return False
         window.connect("close-request", closed)
 
